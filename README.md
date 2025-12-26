@@ -195,8 +195,8 @@ uv run msaez impact OrderCancelled
 ### Python API 사용
 
 ```python
-from agent import create_event_storming_graph, EventStormingState
-from agent.graph import EventStormingRunner
+from api.features.ingestion.event_storming import create_event_storming_graph, EventStormingState
+from api.features.ingestion.event_storming.graph import EventStormingRunner
 
 # Runner 생성
 runner = EventStormingRunner(thread_id="my-session")

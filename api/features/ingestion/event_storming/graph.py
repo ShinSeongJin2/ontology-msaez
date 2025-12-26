@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from agent.nodes import (
+from .nodes import (
     approve_aggregates_node,
     approve_bc_node,
     approve_policies_node,
@@ -45,7 +45,7 @@ from agent.nodes import (
     load_user_stories_node,
     save_to_graph_node,
 )
-from agent.state import EventStormingState, WorkflowPhase
+from .state import EventStormingState, WorkflowPhase
 
 from api.smart_logger import SmartLogger
 

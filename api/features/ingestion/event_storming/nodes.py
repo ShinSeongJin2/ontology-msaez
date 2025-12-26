@@ -20,8 +20,8 @@ from typing import Any, List, Dict
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from agent.neo4j_client import get_neo4j_client
-from agent.prompts import (
+from .neo4j_client import get_neo4j_client
+from .prompts import (
     BREAKDOWN_USER_STORY_PROMPT,
     EXTRACT_AGGREGATES_PROMPT,
     EXTRACT_COMMANDS_PROMPT,
@@ -32,7 +32,7 @@ from agent.prompts import (
 )
 from pydantic import BaseModel, Field
 
-from agent.state import (
+from .state import (
     AggregateCandidate,
     BoundedContextCandidate,
     CommandCandidate,

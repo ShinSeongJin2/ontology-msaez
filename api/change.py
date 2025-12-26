@@ -19,39 +19,15 @@ from __future__ import annotations
 import os
 from typing import Any, Optional, List
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from starlette.requests import Request
-from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 
+from api.platform.neo4j import get_session
 from api.smart_logger import SmartLogger
 from api.request_logging import http_context, summarize_for_log
 
-load_dotenv()
-
 router = APIRouter(prefix="/api/change", tags=["change"])
-
-# Neo4j Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
-NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
-
-driver = None
-
-
-def get_driver():
-    global driver
-    if driver is None:
-        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    return driver
-
-
-def get_session():
-    if NEO4J_DATABASE:
-        return get_driver().session(database=NEO4J_DATABASE)
-    return get_driver().session()
 
 
 # =============================================================================
@@ -284,7 +260,7 @@ async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> 
     - changes: The proposed changes
     - summary: Summary of the plan
     """
-    from agent.change_graph import run_change_planning
+    from api.features.change_management.planning_agent.change_graph import run_change_planning
     
     try:
         SmartLogger.log(

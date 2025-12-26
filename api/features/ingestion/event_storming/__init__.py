@@ -15,8 +15,8 @@ Workflow:
 Human-in-the-loop checkpoints are provided for review and approval.
 """
 
-from agent.graph import create_event_storming_graph
-from agent.state import EventStormingState
+from .graph import create_event_storming_graph
+from .state import EventStormingState
 
 __all__ = ["create_event_storming_graph", "EventStormingState"]
 

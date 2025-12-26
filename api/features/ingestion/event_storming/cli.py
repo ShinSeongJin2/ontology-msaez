@@ -23,9 +23,9 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.tree import Tree
 
-from agent.graph import EventStormingRunner, get_graph_visualization
-from agent.neo4j_client import get_neo4j_client
-from agent.state import WorkflowPhase
+from .graph import EventStormingRunner, get_graph_visualization
+from .neo4j_client import get_neo4j_client
+from .state import WorkflowPhase
 
 app = typer.Typer(
     name="msaez",

@@ -104,7 +104,7 @@ User Story는 명확하고 테스트 가능해야 합니다."""
 
 def save_user_stories_to_neo4j(user_stories: List[GeneratedUserStory]):
     """Save user stories to Neo4j."""
-    from agent.neo4j_client import get_neo4j_client
+    from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
 
     client = get_neo4j_client()
     saved = []
@@ -125,8 +125,8 @@ def save_user_stories_to_neo4j(user_stories: List[GeneratedUserStory]):
 
 def run_event_storming_workflow():
     """Run the Event Storming workflow with auto-approval."""
-    from agent.graph import EventStormingRunner
-    from agent.state import WorkflowPhase
+    from api.features.ingestion.event_storming.graph import EventStormingRunner
+    from api.features.ingestion.event_storming.state import WorkflowPhase
 
     runner = EventStormingRunner(thread_id="requirements-session")
 

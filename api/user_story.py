@@ -14,39 +14,15 @@ import time
 import uuid
 from typing import Any, List, Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
-from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 
+from api.platform.neo4j import get_session
 from api.smart_logger import SmartLogger
 from api.request_logging import http_context, summarize_for_log, sha256_text
 
-load_dotenv()
-
 router = APIRouter(prefix="/api/user-story", tags=["user-story"])
-
-# Neo4j Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
-NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
-
-_driver = None
-
-
-def get_driver():
-    global _driver
-    if _driver is None:
-        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    return _driver
-
-
-def get_session():
-    if NEO4J_DATABASE:
-        return get_driver().session(database=NEO4J_DATABASE)
-    return get_driver().session()
 
 
 class AddUserStoryRequest(BaseModel):
@@ -74,7 +50,7 @@ class AddUserStoryResponse(BaseModel):
 
 @router.post("/add")
 async def add_user_story(request: AddUserStoryRequest, http_request: Request) -> dict[str, Any]:
-    from agent.user_story_graph import run_user_story_planning
+    from api.features.user_stories.planning_agent.user_story_graph import run_user_story_planning
 
     t0 = time.perf_counter()
     SmartLogger.log(

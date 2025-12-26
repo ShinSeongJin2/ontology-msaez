@@ -15,40 +15,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 
+from api.platform.neo4j import get_session
 from api.smart_logger import SmartLogger
 from api.request_logging import http_context, summarize_for_log, sha256_bytes
 
-load_dotenv()
-
 router = APIRouter(prefix="/api/prd", tags=["PRD Generator"])
-
-# Neo4j Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
-NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
-
-_driver = None
-
-
-def get_driver():
-    global _driver
-    if _driver is None:
-        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    return _driver
-
-
-def get_session():
-    if NEO4J_DATABASE:
-        return get_driver().session(database=NEO4J_DATABASE)
-    return get_driver().session()
 
 
 # =============================================================================

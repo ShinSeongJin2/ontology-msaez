@@ -13,27 +13,18 @@ import os
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 
+from api.platform.neo4j import get_session
 from api.smart_logger import SmartLogger
 from api.request_logging import http_context, summarize_for_log, sha256_text
 
-load_dotenv()
-
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-
-# Neo4j Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
-NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
 
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -43,21 +34,6 @@ OPENAI_MODEL = (
     or os.getenv("LLM_MODEL")
     or "gpt-4o"
 )
-
-_driver = None
-
-
-def get_driver():
-    global _driver
-    if _driver is None:
-        _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-    return _driver
-
-
-def get_session():
-    if NEO4J_DATABASE:
-        return get_driver().session(database=NEO4J_DATABASE)
-    return get_driver().session()
 
 
 # =============================================================================

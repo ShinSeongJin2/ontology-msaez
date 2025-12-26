@@ -294,7 +294,7 @@ async def run_ingestion_workflow(
     
     Yields ProgressEvent objects at each significant step.
     """
-    from agent.neo4j_client import get_neo4j_client
+    from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
     
     client = get_neo4j_client()
     
@@ -386,9 +386,9 @@ async def run_ingestion_workflow(
             progress=25
         )
         
-        from agent.nodes import BoundedContextList
+        from api.features.ingestion.event_storming.nodes import BoundedContextList
         from langchain_core.messages import HumanMessage, SystemMessage
-        from agent.prompts import IDENTIFY_BC_FROM_STORIES_PROMPT, SYSTEM_PROMPT
+        from api.features.ingestion.event_storming.prompts import IDENTIFY_BC_FROM_STORIES_PROMPT, SYSTEM_PROMPT
         
         llm = get_llm()
         
@@ -516,8 +516,8 @@ async def run_ingestion_workflow(
             progress=45
         )
         
-        from agent.nodes import AggregateList
-        from agent.prompts import EXTRACT_AGGREGATES_PROMPT
+        from api.features.ingestion.event_storming.nodes import AggregateList
+        from api.features.ingestion.event_storming.prompts import EXTRACT_AGGREGATES_PROMPT
         
         all_aggregates = {}
         progress_per_bc = 10 // max(len(bc_candidates), 1)
@@ -626,8 +626,8 @@ async def run_ingestion_workflow(
             progress=60
         )
         
-        from agent.nodes import CommandList
-        from agent.prompts import EXTRACT_COMMANDS_PROMPT
+        from api.features.ingestion.event_storming.nodes import CommandList
+        from api.features.ingestion.event_storming.prompts import EXTRACT_COMMANDS_PROMPT
         
         all_commands = {}
         
@@ -755,8 +755,8 @@ async def run_ingestion_workflow(
             progress=75
         )
         
-        from agent.nodes import EventList
-        from agent.prompts import EXTRACT_EVENTS_PROMPT
+        from api.features.ingestion.event_storming.nodes import EventList
+        from api.features.ingestion.event_storming.prompts import EXTRACT_EVENTS_PROMPT
         
         all_events = {}
         
@@ -889,8 +889,8 @@ async def run_ingestion_workflow(
             progress=90
         )
         
-        from agent.nodes import PolicyList
-        from agent.prompts import IDENTIFY_POLICIES_PROMPT
+        from api.features.ingestion.event_storming.nodes import PolicyList
+        from api.features.ingestion.event_storming.prompts import IDENTIFY_POLICIES_PROMPT
         
         # Collect all events for policy identification
         all_events_list = []
@@ -1288,7 +1288,7 @@ async def clear_all_data(request: Request) -> dict[str, Any]:
     Clear all nodes and relationships from Neo4j.
     Used before starting a fresh ingestion.
     """
-    from agent.neo4j_client import get_neo4j_client
+    from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
     
     client = get_neo4j_client()
     
@@ -1347,7 +1347,7 @@ async def get_data_stats(request: Request) -> dict[str, Any]:
     """
     Get current data statistics from Neo4j.
     """
-    from agent.neo4j_client import get_neo4j_client
+    from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
     
     client = get_neo4j_client()
     

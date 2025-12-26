@@ -16,8 +16,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-from agent.graph import EventStormingRunner
-from agent.state import WorkflowPhase
+from api.features.ingestion.event_storming.graph import EventStormingRunner
+from api.features.ingestion.event_storming.state import WorkflowPhase
 
 console = Console()
 

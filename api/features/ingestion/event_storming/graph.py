@@ -23,11 +23,7 @@ allowing the workflow to pause and resume when human input is needed.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Literal
-
-from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
@@ -48,8 +44,6 @@ from .nodes import (
 from .state import EventStormingState, WorkflowPhase
 
 from api.platform.observability.smart_logger import SmartLogger
-
-load_dotenv()
 
 
 def should_continue_or_wait(

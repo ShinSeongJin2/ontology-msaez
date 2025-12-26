@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from api.features.ingestion.ingestion_ai_audit import (
+from api.platform.env import (
     AI_AUDIT_LOG_ENABLED,
     AI_AUDIT_LOG_FULL_OUTPUT,
     AI_AUDIT_LOG_FULL_PROMPT,
@@ -15,6 +14,7 @@ from api.features.ingestion.ingestion_contracts import IngestionPhase, ProgressE
 from api.features.ingestion.event_storming.nodes import PolicyList
 from api.features.ingestion.event_storming.prompts import IDENTIFY_POLICIES_PROMPT, SYSTEM_PROMPT
 from api.features.ingestion.workflow.ingestion_workflow_context import IngestionWorkflowContext
+from api.platform.env import get_llm_provider_model
 from api.platform.observability.request_logging import sha256_text, summarize_for_log
 from api.platform.observability.smart_logger import SmartLogger
 
@@ -46,8 +46,7 @@ async def identify_policies_phase(ctx: IngestionWorkflowContext) -> AsyncGenerat
     structured_llm = ctx.llm.with_structured_output(PolicyList)
 
     try:
-        provider = os.getenv("LLM_PROVIDER", "openai")
-        model = os.getenv("LLM_MODEL", "gpt-4o")
+        provider, model = get_llm_provider_model()
         if AI_AUDIT_LOG_ENABLED:
             SmartLogger.log(
                 "INFO",

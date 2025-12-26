@@ -14,35 +14,25 @@ The change planner:
 from __future__ import annotations
 
 import json
-import os
 import time
-from typing import Any, Optional, List
+from typing import Optional, List
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from api.platform.env import (
+    AI_AUDIT_LOG_ENABLED,
+    AI_AUDIT_LOG_FULL_OUTPUT,
+    AI_AUDIT_LOG_FULL_PROMPT,
+    get_llm_provider_model,
+)
 from api.platform.observability.smart_logger import SmartLogger
 from api.platform.observability.request_logging import summarize_for_log, sha256_text
-
-load_dotenv()
 
 
 # =============================================================================
 # LLM Audit Logging (prompt/output + performance)
 # =============================================================================
-
-
-def _env_flag(key: str, default: bool = False) -> bool:
-    val = (os.getenv(key) or "").strip().lower()
-    if not val:
-        return default
-    return val in {"1", "true", "yes", "y", "on"}
-
-
-AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
-AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
-AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
 
 
 # =============================================================================
@@ -169,8 +159,7 @@ Return a JSON object with the revised "changes" array."""
 
 def get_llm():
     """Get the configured LLM instance."""
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -302,8 +291,7 @@ def generate_change_plan(
     # Use structured output
     structured_llm = llm.with_structured_output(ChangePlan)
     
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
     if AI_AUDIT_LOG_ENABLED:
         SmartLogger.log(
             "INFO",

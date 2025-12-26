@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from api.platform.env import get_llm_provider_model
 from api.platform.observability.request_logging import sha256_text, summarize_for_log
 from api.platform.observability.smart_logger import SmartLogger
+from api.platform.env import (
+    AI_AUDIT_LOG_ENABLED,
+    AI_AUDIT_LOG_FULL_OUTPUT,
+    AI_AUDIT_LOG_FULL_PROMPT,
+)
 
-from .user_story_planning_audit import AI_AUDIT_LOG_ENABLED, AI_AUDIT_LOG_FULL_OUTPUT, AI_AUDIT_LOG_FULL_PROMPT
 from .user_story_planning_contracts import PlanningScope, ProposedObject, UserStoryPlanningState
 from .user_story_planning_runtime import generate_id, get_llm, get_neo4j_driver, get_neo4j_session
 
@@ -38,8 +42,7 @@ Respond in JSON:
   "state_changes": ["..."]
 }}"""
 
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
     system_msg = "You are a DDD expert analyzing user stories for domain modeling."
 
     if AI_AUDIT_LOG_ENABLED:
@@ -292,8 +295,7 @@ Respond in JSON:
   ]
 }}"""
 
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
     system_msg = (
         "You are a DDD expert generating domain objects.\n"
         "- Aggregate names: nouns (Order)\n"

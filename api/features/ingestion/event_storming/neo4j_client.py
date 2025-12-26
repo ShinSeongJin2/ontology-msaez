@@ -7,12 +7,17 @@ while keeping a single stable access point (`get_neo4j_client`) for the ingestio
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from dotenv import load_dotenv
 from neo4j import Driver, GraphDatabase
+
+from api.platform.env import (
+    get_neo4j_database,
+    get_neo4j_password,
+    get_neo4j_uri,
+    get_neo4j_user,
+)
 
 from .neo4j_ops.aggregates import AggregateOps
 from .neo4j_ops.analysis import GraphAnalysisOps
@@ -22,19 +27,15 @@ from .neo4j_ops.events import EventOps
 from .neo4j_ops.policies import PolicyOps
 from .neo4j_ops.user_stories import UserStoryOps
 
-load_dotenv()
-
 
 @dataclass
 class Neo4jConfig:
     """Neo4j connection configuration."""
 
-    uri: str = field(default_factory=lambda: os.getenv("NEO4J_URI", "bolt://localhost:7687"))
-    user: str = field(default_factory=lambda: os.getenv("NEO4J_USER", "neo4j"))
-    password: str = field(default_factory=lambda: os.getenv("NEO4J_PASSWORD", "12345msaez"))
-    database: str | None = field(
-        default_factory=lambda: ((os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None)
-    )
+    uri: str = field(default_factory=get_neo4j_uri)
+    user: str = field(default_factory=get_neo4j_user)
+    password: str = field(default_factory=get_neo4j_password)
+    database: str | None = field(default_factory=get_neo4j_database)
 
 
 class Neo4jClient(

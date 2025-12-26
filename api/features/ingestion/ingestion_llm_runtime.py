@@ -7,15 +7,14 @@ Kept feature-local to avoid creating a generic global LLM layer.
 
 from __future__ import annotations
 
-import os
+from api.platform.env import get_llm_provider_model
 
 from api.platform.observability.smart_logger import SmartLogger
 
 
 def get_llm():
     """Get configured LLM instance."""
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
     SmartLogger.log("INFO", "LLM configured", category="ingestion.llm", params={"provider": provider, "model": model})
 
     if provider == "anthropic":

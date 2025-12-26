@@ -7,7 +7,6 @@ Business capability: determine whether a user story change is local, cross-bound
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import Any, Dict
 
@@ -15,8 +14,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.platform.observability.request_logging import sha256_text, summarize_for_log
 from api.platform.observability.smart_logger import SmartLogger
+from api.platform.env import (
+    AI_AUDIT_LOG_ENABLED,
+    AI_AUDIT_LOG_FULL_OUTPUT,
+    AI_AUDIT_LOG_FULL_PROMPT,
+    get_llm_provider_model,
+)
 
-from .change_planning_audit import AI_AUDIT_LOG_ENABLED, AI_AUDIT_LOG_FULL_OUTPUT, AI_AUDIT_LOG_FULL_PROMPT
 from .change_planning_contracts import ChangePlanningPhase, ChangePlanningState, ChangeScope
 from .change_planning_runtime import get_llm
 
@@ -88,8 +92,7 @@ Respond in this exact JSON format:
     "change_description": "Brief description of what changed"
 }}"""
 
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
     system_msg = "You are a DDD expert analyzing change impact."
 
     if AI_AUDIT_LOG_ENABLED:

@@ -7,26 +7,9 @@ Kept local to the `event_storming` feature implementation (not a global "service
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from dotenv import load_dotenv
-
-
-load_dotenv()
-
-
-def _env_flag(key: str, default: bool = False) -> bool:
-    val = (os.getenv(key) or "").strip().lower()
-    if not val:
-        return default
-    return val in {"1", "true", "yes", "y", "on"}
-
-
-AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
-AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
-AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
-
+from api.platform.env import get_llm_provider_model
 
 def dump_model(obj: Any) -> Any:
     """Safely dump a pydantic model (v1/v2) for logging."""
@@ -45,8 +28,7 @@ def dump_model(obj: Any) -> Any:
 
 def get_llm():
     """Get the configured LLM instance."""
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic

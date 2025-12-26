@@ -7,13 +7,18 @@ Kept local to the change planning feature implementation.
 
 from __future__ import annotations
 
-import os
+from api.platform.env import (
+    get_llm_provider_model,
+    get_neo4j_database as get_env_neo4j_database,
+    get_neo4j_password,
+    get_neo4j_uri,
+    get_neo4j_user,
+)
 
 
 def get_llm():
     """Get the configured LLM instance."""
-    provider = os.getenv("LLM_PROVIDER", "openai")
-    model = os.getenv("LLM_MODEL", "gpt-4o")
+    provider, model = get_llm_provider_model()
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -36,16 +41,15 @@ def get_neo4j_driver():
     """Get Neo4j driver."""
     from neo4j import GraphDatabase
 
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    user = os.getenv("NEO4J_USER", "neo4j")
-    password = os.getenv("NEO4J_PASSWORD", "12345msaez")
+    uri = get_neo4j_uri()
+    user = get_neo4j_user()
+    password = get_neo4j_password()
     return GraphDatabase.driver(uri, auth=(user, password))
 
 
 def get_neo4j_database() -> str | None:
     """Get target Neo4j database name (multi-database support)."""
-    db = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip()
-    return db or None
+    return get_env_neo4j_database()
 
 
 def neo4j_session(driver):

@@ -7,7 +7,6 @@ Business capability: iteratively expand impacted node candidates (2nd~N-th order
 from __future__ import annotations
 
 import json
-import os
 import time
 from collections import Counter
 from typing import Any, Dict, List
@@ -16,8 +15,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from api.platform.observability.request_logging import sha256_text, summarize_for_log
 from api.platform.observability.smart_logger import SmartLogger
+from api.platform.env import (
+    AI_AUDIT_LOG_ENABLED,
+    AI_AUDIT_LOG_FULL_OUTPUT,
+    AI_AUDIT_LOG_FULL_PROMPT,
+    env_flag,
+    get_llm_provider_model,
+)
 
-from .change_planning_audit import AI_AUDIT_LOG_ENABLED, AI_AUDIT_LOG_FULL_OUTPUT, AI_AUDIT_LOG_FULL_PROMPT
 from .change_planning_contracts import (
     ChangePlanningPhase,
     ChangePlanningState,
@@ -36,7 +41,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
 
     Option 1 from PoC: inserted inside /plan (LangGraph workflow), not as a separate endpoint.
     """
-    enabled = (os.getenv("CHANGE_PROPAGATION_ENABLED", "true").strip().lower() in ["1", "true", "yes", "y"])
+    enabled = env_flag("CHANGE_PROPAGATION_ENABLED", True)
     if not enabled:
         SmartLogger.log(
             "INFO",
@@ -225,8 +230,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                     max_inline_chars=1200,
                 )
 
-                provider = os.getenv("LLM_PROVIDER", "openai")
-                model = os.getenv("LLM_MODEL", "gpt-4o")
+                provider, model = get_llm_provider_model()
                 system_msg = "You are a DDD expert performing iterative impact propagation with evidence."
 
                 if AI_AUDIT_LOG_ENABLED:

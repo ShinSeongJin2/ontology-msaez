@@ -13,24 +13,25 @@ So feature modules can focus on their domain behavior and Cypher, without
 re-implementing connection plumbing.
 """
 
-import os
 import time
 from typing import Optional
 
-from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j import Driver
 
 from api.platform.observability.smart_logger import SmartLogger
-
-# Load environment variables once for the whole process.
-load_dotenv()
+from api.platform.env import (
+    get_neo4j_database,
+    get_neo4j_password,
+    get_neo4j_uri,
+    get_neo4j_user,
+)
 
 # Neo4j Configuration
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
-NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
-NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
+NEO4J_URI = get_neo4j_uri()
+NEO4J_USER = get_neo4j_user()
+NEO4J_PASSWORD = get_neo4j_password()
+NEO4J_DATABASE = get_neo4j_database()
 
 _driver: Optional[Driver] = None
 

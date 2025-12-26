@@ -4,22 +4,21 @@ Event Storming Nodes: command extraction
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from api.platform.observability.request_logging import sha256_text, summarize_for_log
-from api.platform.observability.smart_logger import SmartLogger
-
-from .node_runtime import (
+from api.platform.env import (
     AI_AUDIT_LOG_ENABLED,
     AI_AUDIT_LOG_FULL_OUTPUT,
     AI_AUDIT_LOG_FULL_PROMPT,
-    dump_model,
-    get_llm,
+    get_llm_provider_model,
 )
+from api.platform.observability.request_logging import sha256_text, summarize_for_log
+from api.platform.observability.smart_logger import SmartLogger
+
+from .node_runtime import dump_model, get_llm
 from .prompts import EXTRACT_COMMANDS_PROMPT, SYSTEM_PROMPT
 from .state import EventStormingState, WorkflowPhase
 from .structured_outputs import CommandList
@@ -55,8 +54,7 @@ def extract_commands_node(state: EventStormingState) -> Dict[str, Any]:
 
             structured_llm = llm.with_structured_output(CommandList)
 
-            provider = os.getenv("LLM_PROVIDER", "openai")
-            model = os.getenv("LLM_MODEL", "gpt-4o")
+            provider, model = get_llm_provider_model()
             if AI_AUDIT_LOG_ENABLED:
                 SmartLogger.log(
                     "INFO",

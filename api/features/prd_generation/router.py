@@ -1,5 +1,5 @@
 """
-PRD Generator API
+PRD Generator API (feature router)
 
 Generates PRD (Product Requirements Document) and AI-friendly project context files
 from the current Event Storming model stored in Neo4j.
@@ -8,7 +8,6 @@ from the current Event Storming model stored in Neo4j.
 from __future__ import annotations
 
 import io
-import os
 import time
 import zipfile
 from datetime import datetime
@@ -21,8 +20,8 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from api.platform.neo4j import get_session
-from api.smart_logger import SmartLogger
-from api.request_logging import http_context, summarize_for_log, sha256_bytes
+from api.platform.observability.request_logging import http_context, summarize_for_log, sha256_bytes
+from api.platform.observability.smart_logger import SmartLogger
 
 router = APIRouter(prefix="/api/prd", tags=["PRD Generator"])
 
@@ -169,10 +168,7 @@ def fetch_bc_data(bc_id: str) -> dict | None:
                 params={
                     "bc_id": bc_id,
                     "duration_ms": int((time.perf_counter() - t0) * 1000),
-                    "summary": {
-                        "aggregates": len(bc_data.get("aggregates") or []),
-                        "policies": len(bc_data.get("policies") or []),
-                    },
+                    "summary": {"aggregates": len(bc_data.get("aggregates") or []), "policies": len(bc_data.get("policies") or [])},
                 },
             )
             return bc_data
@@ -420,26 +416,9 @@ async def get_available_tech_stacks(request: Request):
     )
     payload = {
         "languages": [{"value": l.value, "label": l.name.title()} for l in Language],
-        "frameworks": [
-            {
-                "value": f.value,
-                "label": f.value.replace("-", " ").title(),
-                "languages": _get_framework_languages(f),
-            }
-            for f in Framework
-        ],
-        "messaging": [
-            {
-                "value": m.value,
-                "label": m.value.replace("-", " ").title(),
-                "description": _get_messaging_description(m),
-            }
-            for m in MessagingPlatform
-        ],
-        "deployments": [
-            {"value": d.value, "label": d.value.replace("-", " ").title()}
-            for d in DeploymentStyle
-        ],
+        "frameworks": [{"value": f.value, "label": f.value.replace("-", " ").title(), "languages": _get_framework_languages(f)} for f in Framework],
+        "messaging": [{"value": m.value, "label": m.value.replace("-", " ").title(), "description": _get_messaging_description(m)} for m in MessagingPlatform],
+        "deployments": [{"value": d.value, "label": d.value.replace("-", " ").title()} for d in DeploymentStyle],
         "databases": [{"value": d.value, "label": d.value.title()} for d in Database],
     }
     SmartLogger.log(
@@ -461,13 +440,7 @@ async def generate_prd(request: PRDGenerationRequest, http_request: Request):
         "INFO",
         "PRD: generation plan requested.",
         category="api.prd.generate.request",
-        params={
-            **http_context(http_request),
-            "inputs": {
-                "node_ids": summarize_for_log(request.node_ids),
-                "tech_stack": request.tech_stack.model_dump(),
-            },
-        },
+        params={**http_context(http_request), "inputs": {"node_ids": summarize_for_log(request.node_ids), "tech_stack": request.tech_stack.model_dump()}},
     )
 
     bcs = get_bcs_from_nodes(request.node_ids)
@@ -500,10 +473,7 @@ async def generate_prd(request: PRDGenerationRequest, http_request: Request):
         params={
             **http_context(http_request),
             "duration_ms": int((time.perf_counter() - t0) * 1000),
-            "summary": {
-                "bcs": len(bcs),
-                "files_to_generate": len(files_to_generate),
-            },
+            "summary": {"bcs": len(bcs), "files_to_generate": len(files_to_generate)},
         },
     )
     return payload
@@ -519,13 +489,7 @@ async def download_prd_zip(request: PRDGenerationRequest, http_request: Request)
         "INFO",
         "PRD: zip download requested.",
         category="api.prd.download.request",
-        params={
-            **http_context(http_request),
-            "inputs": {
-                "node_ids": summarize_for_log(request.node_ids),
-                "tech_stack": request.tech_stack.model_dump(),
-            },
-        },
+        params={**http_context(http_request), "inputs": {"node_ids": summarize_for_log(request.node_ids), "tech_stack": request.tech_stack.model_dump()}},
     )
 
     bcs = get_bcs_from_nodes(request.node_ids)
@@ -566,21 +530,12 @@ async def download_prd_zip(request: PRDGenerationRequest, http_request: Request)
             **http_context(http_request),
             "duration_ms": int((time.perf_counter() - t0) * 1000),
             "zip_build_ms": int((time.perf_counter() - t_zip0) * 1000),
-            "summary": {
-                "bcs": len(bcs),
-                "zip_bytes": zip_size,
-                "zip_sha256": zip_sha,
-                "filename": filename,
-            },
+            "summary": {"bcs": len(bcs), "zip_bytes": zip_size, "zip_sha256": zip_sha, "filename": filename},
         },
     )
 
     zip_buffer = io.BytesIO(zip_bytes)
     zip_buffer.seek(0)
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
-    )
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 

@@ -6,8 +6,8 @@ from fastapi import APIRouter, HTTPException, Query
 from starlette.requests import Request
 
 from api.platform.neo4j import get_session
-from api.request_logging import http_context, summarize_for_log
-from api.smart_logger import SmartLogger
+from api.platform.observability.request_logging import http_context, summarize_for_log
+from api.platform.observability.smart_logger import SmartLogger
 
 router = APIRouter(prefix="/api/graph", tags=["canvas-graph"])
 

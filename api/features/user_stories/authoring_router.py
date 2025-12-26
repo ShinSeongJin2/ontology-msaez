@@ -1,15 +1,13 @@
 """
-User Story Management API - Add and manage user stories with automatic plan generation.
+User Story authoring/management API (feature router)
 
-Endpoints:
-- POST /api/user-story/add   : analyze + propose plan (human review)
-- POST /api/user-story/apply : apply approved plan to Neo4j
-- GET  /api/user-story/unassigned : list unassigned user stories
+- Add a user story and generate an initial plan (human review)
+- Apply an approved plan to Neo4j
+- List unassigned user stories (legacy endpoint)
 """
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from typing import Any, List, Optional
@@ -19,8 +17,8 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from api.platform.neo4j import get_session
-from api.smart_logger import SmartLogger
-from api.request_logging import http_context, summarize_for_log, sha256_text
+from api.platform.observability.request_logging import http_context, summarize_for_log, sha256_text
+from api.platform.observability.smart_logger import SmartLogger
 
 router = APIRouter(prefix="/api/user-story", tags=["user-story"])
 
@@ -353,15 +351,7 @@ async def apply_user_story(request: ApplyUserStoryRequest, http_request: Request
 
                     ms = int((time.perf_counter() - t_change0) * 1000)
                     applied_changes.append({**change, "success": True, "duration_ms": ms})
-                    change_timings.append(
-                        {
-                            "action": action,
-                            "targetType": target_type,
-                            "targetId": target_id,
-                            "duration_ms": ms,
-                            "success": True,
-                        }
-                    )
+                    change_timings.append({"action": action, "targetType": target_type, "targetId": target_id, "duration_ms": ms, "success": True})
 
                 elif action == "connect":
                     if connection_type == "TRIGGERS":
@@ -424,29 +414,14 @@ async def apply_user_story(request: ApplyUserStoryRequest, http_request: Request
                     )
                     ms = int((time.perf_counter() - t_change0) * 1000)
                     applied_changes.append({**change, "success": True, "duration_ms": ms})
-                    change_timings.append(
-                        {
-                            "action": action,
-                            "targetType": target_type,
-                            "targetId": target_id,
-                            "duration_ms": ms,
-                            "success": True,
-                        }
-                    )
+                    change_timings.append({"action": action, "targetType": target_type, "targetId": target_id, "duration_ms": ms, "success": True})
 
             except Exception as e:
                 errors.append(f"Failed to apply {action} on {change.get('targetId')}: {str(e)}")
                 ms = int((time.perf_counter() - t_change0) * 1000) if "t_change0" in locals() else None
                 applied_changes.append({**change, "success": False, "error": str(e), "duration_ms": ms})
                 change_timings.append(
-                    {
-                        "action": change.get("action"),
-                        "targetType": change.get("targetType"),
-                        "targetId": change.get("targetId"),
-                        "duration_ms": ms,
-                        "success": False,
-                        "error": str(e),
-                    }
+                    {"action": change.get("action"), "targetType": change.get("targetType"), "targetId": change.get("targetId"), "duration_ms": ms, "success": False, "error": str(e)}
                 )
                 SmartLogger.log(
                     "WARNING",
@@ -471,21 +446,11 @@ async def apply_user_story(request: ApplyUserStoryRequest, http_request: Request
             **http_context(http_request),
             "duration_ms": total_ms,
             "userStoryId": user_story_id,
-            "summary": {
-                "success": len(errors) == 0,
-                "appliedChanges": len(applied_changes),
-                "errors": len(errors),
-                "slowest_changes_top10": slowest,
-            },
+            "summary": {"success": len(errors) == 0, "appliedChanges": len(applied_changes), "errors": len(errors), "slowest_changes_top10": slowest},
         },
     )
 
-    return {
-        "success": len(errors) == 0,
-        "userStoryId": user_story_id,
-        "appliedChanges": applied_changes,
-        "errors": errors,
-    }
+    return {"success": len(errors) == 0, "userStoryId": user_story_id, "appliedChanges": applied_changes, "errors": errors}
 
 
 @router.get("/unassigned")
@@ -504,11 +469,7 @@ async def get_unassigned_user_stories(http_request: Request) -> List[dict[str, A
             "INFO",
             "User story unassigned list returned.",
             category="api.user_story.unassigned.done",
-            params={
-                **http_context(http_request),
-                "duration_ms": int((time.perf_counter() - t0) * 1000),
-                "count": len(items),
-            },
+            params={**http_context(http_request), "duration_ms": int((time.perf_counter() - t0) * 1000), "count": len(items)},
         )
         return items
 

@@ -1,10 +1,10 @@
 """
-Ingestion API - Document Upload and Real-time Processing
+Ingestion API (feature router) - Document Upload and Real-time Processing
 
-Provides:
-- File upload endpoint (text, PDF)
-- SSE streaming for real-time progress updates
-- Integration with Event Storming workflow
+Business capability:
+- Upload requirements documents (text, PDF)
+- Stream real-time progress (SSE)
+- Run Event Storming extraction workflow and persist to Neo4j
 """
 
 from __future__ import annotations
@@ -20,15 +20,23 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from starlette.requests import Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+from starlette.requests import Request
 
-from api.smart_logger import SmartLogger
-from api.request_logging import http_context, summarize_for_log, sha256_bytes, sha256_text
+from api.platform.observability.request_logging import (
+    http_context,
+    sha256_bytes,
+    sha256_text,
+    summarize_for_log,
+)
+from api.platform.observability.smart_logger import SmartLogger
 
-# Add parent directory to path for agent imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Keep a stable import root when running the API in varied contexts (dev/prod/tests).
+# Historically this module was at `api/ingestion.py` and inserted the project root.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+if _PROJECT_ROOT and _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
 
@@ -71,6 +79,7 @@ class IngestionPhase(str, Enum):
 
 class ProgressEvent(BaseModel):
     """Progress event sent via SSE."""
+
     phase: IngestionPhase
     message: str
     progress: int  # 0-100
@@ -79,6 +88,7 @@ class ProgressEvent(BaseModel):
 
 class CreatedObject(BaseModel):
     """Information about a created DDD object."""
+
     id: str
     name: str
     type: str  # BoundedContext, Aggregate, Command, Event, Policy
@@ -94,6 +104,7 @@ class CreatedObject(BaseModel):
 @dataclass
 class IngestionSession:
     """Tracks state of an ingestion session."""
+
     id: str
     status: IngestionPhase = IngestionPhase.UPLOAD
     progress: int = 0
@@ -121,6 +132,7 @@ def create_session() -> IngestionSession:
 
 def add_event(session: IngestionSession, event: ProgressEvent):
     """Add event to session and update status."""
+
     session.events.append(event.model_dump())
     session.status = event.phase
     session.progress = event.progress
@@ -134,16 +146,17 @@ def add_event(session: IngestionSession, event: ProgressEvent):
 
 def extract_text_from_pdf(file_content: bytes) -> str:
     """Extract text from PDF file using PyMuPDF."""
+
     try:
         import fitz  # PyMuPDF
-        
+
         doc = fitz.open(stream=file_content, filetype="pdf")
         text_parts = []
-        
+
         for page_num in range(len(doc)):
             page = doc.load_page(page_num)
             text_parts.append(page.get_text())
-        
+
         doc.close()
         return "\n".join(text_parts)
     except ImportError:
@@ -154,7 +167,7 @@ def extract_text_from_pdf(file_content: bytes) -> str:
         )
         raise HTTPException(
             status_code=500,
-            detail="PDF processing requires PyMuPDF. Install with: pip install PyMuPDF"
+            detail="PDF processing requires PyMuPDF. Install with: pip install PyMuPDF",
         )
     except Exception as e:
         SmartLogger.log("ERROR", "Failed to parse PDF", category="ingestion.pdf", params={"error": str(e)})
@@ -168,15 +181,18 @@ def extract_text_from_pdf(file_content: bytes) -> str:
 
 def get_llm():
     """Get configured LLM instance."""
+
     provider = os.getenv("LLM_PROVIDER", "openai")
     model = os.getenv("LLM_MODEL", "gpt-4o")
     SmartLogger.log("INFO", "LLM configured", category="ingestion.llm", params={"provider": provider, "model": model})
-    
+
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+
         return ChatAnthropic(model=model, temperature=0)
     else:
         from langchain_openai import ChatOpenAI
+
         return ChatOpenAI(model=model, temperature=0)
 
 
@@ -203,6 +219,7 @@ User Story ID는 US-001, US-002 형식으로 순차적으로 부여하세요.
 
 class GeneratedUserStory(BaseModel):
     """Generated User Story from requirements."""
+
     id: str
     role: str
     action: str
@@ -212,20 +229,22 @@ class GeneratedUserStory(BaseModel):
 
 class UserStoryList(BaseModel):
     """List of generated user stories."""
+
     user_stories: list[GeneratedUserStory]
 
 
 def extract_user_stories_from_text(text: str) -> list[GeneratedUserStory]:
     """Extract user stories from text using LLM."""
+
     from langchain_core.messages import HumanMessage, SystemMessage
-    
+
     llm = get_llm()
     structured_llm = llm.with_structured_output(UserStoryList)
-    
+
     system_prompt = """당신은 도메인 주도 설계(DDD) 전문가입니다. 
 요구사항을 User Story로 변환하는 작업을 수행합니다.
 User Story는 명확하고 테스트 가능해야 합니다."""
-    
+
     prompt = EXTRACT_USER_STORIES_PROMPT.format(requirements=text[:8000])  # Limit context
 
     provider = os.getenv("LLM_PROVIDER", "openai")
@@ -276,7 +295,7 @@ User Story는 명확하고 테스트 가능해야 합니다."""
             },
             max_inline_chars=1800,
         )
-    
+
     return response.user_stories
 
 
@@ -285,19 +304,15 @@ User Story는 명확하고 테스트 가능해야 합니다."""
 # =============================================================================
 
 
-async def run_ingestion_workflow(
-    session: IngestionSession,
-    content: str
-) -> AsyncGenerator[ProgressEvent, None]:
+async def run_ingestion_workflow(session: IngestionSession, content: str) -> AsyncGenerator[ProgressEvent, None]:
     """
     Run the full ingestion workflow with streaming progress updates.
-    
-    Yields ProgressEvent objects at each significant step.
     """
+
     from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
-    
+
     client = get_neo4j_client()
-    
+
     try:
         SmartLogger.log(
             "INFO",
@@ -306,20 +321,12 @@ async def run_ingestion_workflow(
             params={"session_id": session.id, "content_length": len(content)},
         )
         # Phase 1: Parsing
-        yield ProgressEvent(
-            phase=IngestionPhase.PARSING,
-            message="문서 파싱 중...",
-            progress=5
-        )
+        yield ProgressEvent(phase=IngestionPhase.PARSING, message="문서 파싱 중...", progress=5)
         await asyncio.sleep(0.3)  # Small delay for UI feedback
-        
+
         # Phase 2: Extract User Stories
-        yield ProgressEvent(
-            phase=IngestionPhase.EXTRACTING_USER_STORIES,
-            message="User Story 추출 중...",
-            progress=10
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.EXTRACTING_USER_STORIES, message="User Story 추출 중...", progress=10)
+
         user_stories = extract_user_stories_from_text(content)
         SmartLogger.log(
             "INFO",
@@ -327,7 +334,7 @@ async def run_ingestion_workflow(
             category="ingestion.workflow.user_stories",
             params={"session_id": session.id, "count": len(user_stories)},
         )
-        
+
         # Save user stories to Neo4j and emit events for each
         for i, us in enumerate(user_stories):
             try:
@@ -337,9 +344,9 @@ async def run_ingestion_workflow(
                     action=us.action,
                     benefit=us.benefit,
                     priority=us.priority,
-                    status="draft"
+                    status="draft",
                 )
-                
+
                 # Emit event for each User Story created
                 yield ProgressEvent(
                     phase=IngestionPhase.EXTRACTING_USER_STORIES,
@@ -354,12 +361,12 @@ async def run_ingestion_workflow(
                             "role": us.role,
                             "action": us.action,
                             "benefit": us.benefit,
-                            "priority": us.priority
-                        }
-                    }
+                            "priority": us.priority,
+                        },
+                    },
                 )
                 await asyncio.sleep(0.15)  # Small delay for visual effect
-                
+
             except Exception as e:
                 # Skip if already exists (or any create error) but keep traceability.
                 SmartLogger.log(
@@ -368,35 +375,30 @@ async def run_ingestion_workflow(
                     category="ingestion.neo4j.user_story",
                     params={"session_id": session.id, "id": us.id, "error": str(e)},
                 )
-        
+
         yield ProgressEvent(
             phase=IngestionPhase.EXTRACTING_USER_STORIES,
             message=f"{len(user_stories)}개 User Story 추출 완료",
             progress=20,
             data={
                 "count": len(user_stories),
-                "items": [{"id": us.id, "role": us.role, "action": us.action[:50]} for us in user_stories]
-            }
+                "items": [{"id": us.id, "role": us.role, "action": us.action[:50]} for us in user_stories],
+            },
         )
-        
+
         # Phase 3: Identify Bounded Contexts
-        yield ProgressEvent(
-            phase=IngestionPhase.IDENTIFYING_BC,
-            message="Bounded Context 식별 중...",
-            progress=25
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.IDENTIFYING_BC, message="Bounded Context 식별 중...", progress=25)
+
         from api.features.ingestion.event_storming.nodes import BoundedContextList
-        from langchain_core.messages import HumanMessage, SystemMessage
         from api.features.ingestion.event_storming.prompts import IDENTIFY_BC_FROM_STORIES_PROMPT, SYSTEM_PROMPT
-        
+        from langchain_core.messages import HumanMessage, SystemMessage
+
         llm = get_llm()
-        
-        stories_text = "\n".join([
-            f"[{us.id}] As a {us.role}, I want to {us.action}, so that {us.benefit}"
-            for us in user_stories
-        ])
-        
+
+        stories_text = "\n".join(
+            [f"[{us.id}] As a {us.role}, I want to {us.action}, so that {us.benefit}" for us in user_stories]
+        )
+
         structured_llm = llm.with_structured_output(BoundedContextList)
         prompt = IDENTIFY_BC_FROM_STORIES_PROMPT.format(user_stories=stories_text)
 
@@ -445,7 +447,7 @@ async def run_ingestion_workflow(
                 },
                 max_inline_chars=1800,
             )
-        
+
         bc_candidates = bc_response.bounded_contexts
         SmartLogger.log(
             "INFO",
@@ -453,15 +455,11 @@ async def run_ingestion_workflow(
             category="ingestion.workflow.bc",
             params={"session_id": session.id, "count": len(bc_candidates), "ids": [bc.id for bc in bc_candidates][:10]},
         )
-        
+
         # Create BCs in Neo4j
         for bc_idx, bc in enumerate(bc_candidates):
-            client.create_bounded_context(
-                id=bc.id,
-                name=bc.name,
-                description=bc.description
-            )
-            
+            client.create_bounded_context(id=bc.id, name=bc.name, description=bc.description)
+
             # Emit BC creation event
             yield ProgressEvent(
                 phase=IngestionPhase.IDENTIFYING_BC,
@@ -474,31 +472,25 @@ async def run_ingestion_workflow(
                         "name": bc.name,
                         "type": "BoundedContext",
                         "description": bc.description,
-                        "userStoryIds": bc.user_story_ids
-                    }
-                }
+                        "userStoryIds": bc.user_story_ids,
+                    },
+                },
             )
             await asyncio.sleep(0.2)
-            
+
             # Link user stories to BC and emit move events
             for us_id in bc.user_story_ids:
                 try:
                     client.link_user_story_to_bc(us_id, bc.id)
-                    
-                    # Emit event for User Story moving to BC
+
                     yield ProgressEvent(
                         phase=IngestionPhase.IDENTIFYING_BC,
                         message=f"User Story {us_id} → {bc.name}",
                         progress=30 + (10 * bc_idx // max(len(bc_candidates), 1)),
                         data={
                             "type": "UserStoryAssigned",
-                            "object": {
-                                "id": us_id,
-                                "type": "UserStory",
-                                "targetBcId": bc.id,
-                                "targetBcName": bc.name
-                            }
-                        }
+                            "object": {"id": us_id, "type": "UserStory", "targetBcId": bc.id, "targetBcName": bc.name},
+                        },
                     )
                     await asyncio.sleep(0.1)
                 except Exception as e:
@@ -508,34 +500,29 @@ async def run_ingestion_workflow(
                         category="ingestion.neo4j.us_to_bc",
                         params={"session_id": session.id, "user_story_id": us_id, "bc_id": bc.id, "error": str(e)},
                     )
-        
+
         # Phase 4: Extract Aggregates
-        yield ProgressEvent(
-            phase=IngestionPhase.EXTRACTING_AGGREGATES,
-            message="Aggregate 추출 중...",
-            progress=45
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.EXTRACTING_AGGREGATES, message="Aggregate 추출 중...", progress=45)
+
         from api.features.ingestion.event_storming.nodes import AggregateList
         from api.features.ingestion.event_storming.prompts import EXTRACT_AGGREGATES_PROMPT
-        
-        all_aggregates = {}
+
+        all_aggregates: dict[str, Any] = {}
         progress_per_bc = 10 // max(len(bc_candidates), 1)
-        
+
         for bc_idx, bc in enumerate(bc_candidates):
             bc_id_short = bc.id.replace("BC-", "")
-            
-            # Create dummy breakdowns context
+
             breakdowns_text = f"User Stories: {', '.join(bc.user_story_ids)}"
-            
+
             prompt = EXTRACT_AGGREGATES_PROMPT.format(
                 bc_name=bc.name,
                 bc_id=bc.id,
                 bc_id_short=bc_id_short,
                 bc_description=bc.description,
-                breakdowns=breakdowns_text
+                breakdowns=breakdowns_text,
             )
-            
+
             structured_llm = llm.with_structured_output(AggregateList)
 
             provider = os.getenv("LLM_PROVIDER", "openai")
@@ -584,7 +571,7 @@ async def run_ingestion_workflow(
                     },
                     max_inline_chars=1800,
                 )
-            
+
             aggregates = agg_response.aggregates
             all_aggregates[bc.id] = aggregates
             SmartLogger.log(
@@ -593,64 +580,51 @@ async def run_ingestion_workflow(
                 category="ingestion.workflow.aggregates",
                 params={"session_id": session.id, "bc_id": bc.id, "bc_name": bc.name, "count": len(aggregates)},
             )
-            
+
             for agg in aggregates:
                 client.create_aggregate(
                     id=agg.id,
                     name=agg.name,
                     bc_id=bc.id,
                     root_entity=agg.root_entity,
-                    invariants=agg.invariants
+                    invariants=agg.invariants,
                 )
-                
+
                 yield ProgressEvent(
                     phase=IngestionPhase.EXTRACTING_AGGREGATES,
                     message=f"Aggregate 생성: {agg.name}",
                     progress=45 + progress_per_bc * bc_idx,
-                    data={
-                        "type": "Aggregate",
-                        "object": {
-                            "id": agg.id,
-                            "name": agg.name,
-                            "type": "Aggregate",
-                            "parentId": bc.id
-                        }
-                    }
+                    data={"type": "Aggregate", "object": {"id": agg.id, "name": agg.name, "type": "Aggregate", "parentId": bc.id}},
                 )
                 await asyncio.sleep(0.15)
-        
+
         # Phase 5: Extract Commands
-        yield ProgressEvent(
-            phase=IngestionPhase.EXTRACTING_COMMANDS,
-            message="Command 추출 중...",
-            progress=60
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.EXTRACTING_COMMANDS, message="Command 추출 중...", progress=60)
+
         from api.features.ingestion.event_storming.nodes import CommandList
         from api.features.ingestion.event_storming.prompts import EXTRACT_COMMANDS_PROMPT
-        
-        all_commands = {}
-        
+
+        all_commands: dict[str, Any] = {}
+
         for bc in bc_candidates:
             bc_id_short = bc.id.replace("BC-", "")
             bc_aggregates = all_aggregates.get(bc.id, [])
-            
+
             for agg in bc_aggregates:
-                stories_context = "\n".join([
-                    f"[{us.id}] As a {us.role}, I want to {us.action}"
-                    for us in user_stories if us.id in bc.user_story_ids
-                ])
-                
+                stories_context = "\n".join(
+                    [f"[{us.id}] As a {us.role}, I want to {us.action}" for us in user_stories if us.id in bc.user_story_ids]
+                )
+
                 prompt = EXTRACT_COMMANDS_PROMPT.format(
                     aggregate_name=agg.name,
                     aggregate_id=agg.id,
                     bc_name=bc.name,
                     bc_short=bc_id_short,
-                    user_story_context=stories_context[:2000]
+                    user_story_context=stories_context[:2000],
                 )
-                
+
                 structured_llm = llm.with_structured_output(CommandList)
-                
+
                 try:
                     provider = os.getenv("LLM_PROVIDER", "openai")
                     model = os.getenv("LLM_MODEL", "gpt-4o")
@@ -673,19 +647,13 @@ async def run_ingestion_workflow(
                         )
 
                     t_llm0 = time.perf_counter()
-                    cmd_response = structured_llm.invoke(
-                        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
-                    )
+                    cmd_response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
                     llm_ms = int((time.perf_counter() - t_llm0) * 1000)
                     commands = cmd_response.commands
 
                     if AI_AUDIT_LOG_ENABLED:
                         try:
-                            resp_dump = (
-                                cmd_response.model_dump()
-                                if hasattr(cmd_response, "model_dump")
-                                else cmd_response.dict()
-                            )
+                            resp_dump = cmd_response.model_dump() if hasattr(cmd_response, "model_dump") else cmd_response.dict()
                         except Exception:
                             resp_dump = {"__type__": type(cmd_response).__name__, "__repr__": repr(cmd_response)[:1000]}
                         SmartLogger.log(
@@ -714,7 +682,7 @@ async def run_ingestion_workflow(
                         params={"session_id": session.id, "bc_id": bc.id, "agg_id": agg.id, "error": str(e)},
                     )
                     commands = []
-                
+
                 all_commands[agg.id] = commands
                 if commands:
                     SmartLogger.log(
@@ -723,66 +691,51 @@ async def run_ingestion_workflow(
                         category="ingestion.workflow.commands",
                         params={"session_id": session.id, "agg_id": agg.id, "count": len(commands)},
                     )
-                
+
                 for cmd in commands:
-                    client.create_command(
-                        id=cmd.id,
-                        name=cmd.name,
-                        aggregate_id=agg.id,
-                        actor=cmd.actor
-                    )
-                    
+                    client.create_command(id=cmd.id, name=cmd.name, aggregate_id=agg.id, actor=cmd.actor)
+
                     yield ProgressEvent(
                         phase=IngestionPhase.EXTRACTING_COMMANDS,
                         message=f"Command 생성: {cmd.name}",
                         progress=65,
-                        data={
-                            "type": "Command",
-                            "object": {
-                                "id": cmd.id,
-                                "name": cmd.name,
-                                "type": "Command",
-                                "parentId": agg.id
-                            }
-                        }
+                        data={"type": "Command", "object": {"id": cmd.id, "name": cmd.name, "type": "Command", "parentId": agg.id}},
                     )
                     await asyncio.sleep(0.1)
-        
+
         # Phase 6: Extract Events
-        yield ProgressEvent(
-            phase=IngestionPhase.EXTRACTING_EVENTS,
-            message="Event 추출 중...",
-            progress=75
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.EXTRACTING_EVENTS, message="Event 추출 중...", progress=75)
+
         from api.features.ingestion.event_storming.nodes import EventList
         from api.features.ingestion.event_storming.prompts import EXTRACT_EVENTS_PROMPT
-        
-        all_events = {}
-        
+
+        all_events: dict[str, Any] = {}
+
         for bc in bc_candidates:
             bc_id_short = bc.id.replace("BC-", "")
             bc_aggregates = all_aggregates.get(bc.id, [])
-            
+
             for agg in bc_aggregates:
                 commands = all_commands.get(agg.id, [])
                 if not commands:
                     continue
-                
-                commands_text = "\n".join([
-                    f"- {cmd.name}: {cmd.description}" if hasattr(cmd, 'description') else f"- {cmd.name}"
-                    for cmd in commands
-                ])
-                
+
+                commands_text = "\n".join(
+                    [
+                        f"- {cmd.name}: {cmd.description}" if hasattr(cmd, "description") else f"- {cmd.name}"
+                        for cmd in commands
+                    ]
+                )
+
                 prompt = EXTRACT_EVENTS_PROMPT.format(
                     aggregate_name=agg.name,
                     bc_name=bc.name,
                     bc_short=bc_id_short,
-                    commands=commands_text
+                    commands=commands_text,
                 )
-                
+
                 structured_llm = llm.with_structured_output(EventList)
-                
+
                 try:
                     provider = os.getenv("LLM_PROVIDER", "openai")
                     model = os.getenv("LLM_MODEL", "gpt-4o")
@@ -805,19 +758,13 @@ async def run_ingestion_workflow(
                         )
 
                     t_llm0 = time.perf_counter()
-                    evt_response = structured_llm.invoke(
-                        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
-                    )
+                    evt_response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
                     llm_ms = int((time.perf_counter() - t_llm0) * 1000)
                     events = evt_response.events
 
                     if AI_AUDIT_LOG_ENABLED:
                         try:
-                            resp_dump = (
-                                evt_response.model_dump()
-                                if hasattr(evt_response, "model_dump")
-                                else evt_response.dict()
-                            )
+                            resp_dump = evt_response.model_dump() if hasattr(evt_response, "model_dump") else evt_response.dict()
                         except Exception:
                             resp_dump = {"__type__": type(evt_response).__name__, "__repr__": repr(evt_response)[:1000]}
                         SmartLogger.log(
@@ -846,7 +793,7 @@ async def run_ingestion_workflow(
                         params={"session_id": session.id, "bc_id": bc.id, "agg_id": agg.id, "error": str(e)},
                     )
                     events = []
-                
+
                 all_events[agg.id] = events
                 if events:
                     SmartLogger.log(
@@ -855,76 +802,50 @@ async def run_ingestion_workflow(
                         category="ingestion.workflow.events",
                         params={"session_id": session.id, "agg_id": agg.id, "count": len(events)},
                     )
-                
+
                 for i, evt in enumerate(events):
                     cmd_id = commands[i].id if i < len(commands) else commands[0].id if commands else None
-                    
+
                     if cmd_id:
-                        client.create_event(
-                            id=evt.id,
-                            name=evt.name,
-                            command_id=cmd_id
-                        )
-                        
+                        client.create_event(id=evt.id, name=evt.name, command_id=cmd_id)
+
                         yield ProgressEvent(
                             phase=IngestionPhase.EXTRACTING_EVENTS,
                             message=f"Event 생성: {evt.name}",
                             progress=80,
-                            data={
-                                "type": "Event",
-                                "object": {
-                                    "id": evt.id,
-                                    "name": evt.name,
-                                    "type": "Event",
-                                    "parentId": cmd_id
-                                }
-                            }
+                            data={"type": "Event", "object": {"id": evt.id, "name": evt.name, "type": "Event", "parentId": cmd_id}},
                         )
                         await asyncio.sleep(0.1)
-        
+
         # Phase 7: Identify Policies
-        yield ProgressEvent(
-            phase=IngestionPhase.IDENTIFYING_POLICIES,
-            message="Policy 식별 중...",
-            progress=90
-        )
-        
+        yield ProgressEvent(phase=IngestionPhase.IDENTIFYING_POLICIES, message="Policy 식별 중...", progress=90)
+
         from api.features.ingestion.event_storming.nodes import PolicyList
         from api.features.ingestion.event_storming.prompts import IDENTIFY_POLICIES_PROMPT
-        
-        # Collect all events for policy identification
-        all_events_list = []
-        for agg_id, events in all_events.items():
+
+        all_events_list: list[str] = []
+        for events in all_events.values():
             for evt in events:
                 all_events_list.append(f"- {evt.name}")
-        
+
         events_text = "\n".join(all_events_list)
-        
-        # Collect commands by BC
-        commands_by_bc = {}
+
+        commands_by_bc: dict[str, str] = {}
         for bc in bc_candidates:
-            bc_cmds = []
+            bc_cmds: list[str] = []
             for agg in all_aggregates.get(bc.id, []):
                 for cmd in all_commands.get(agg.id, []):
                     bc_cmds.append(f"- {cmd.name}")
             commands_by_bc[bc.name] = "\n".join(bc_cmds) if bc_cmds else "No commands"
-        
-        commands_text = "\n".join([
-            f"{bc_name}:\n{cmds}" for bc_name, cmds in commands_by_bc.items()
-        ])
-        
-        bc_text = "\n".join([
-            f"- {bc.name}: {bc.description}" for bc in bc_candidates
-        ])
-        
-        prompt = IDENTIFY_POLICIES_PROMPT.format(
-            events=events_text,
-            commands_by_bc=commands_text,
-            bounded_contexts=bc_text
-        )
-        
+
+        commands_text = "\n".join([f"{bc_name}:\n{cmds}" for bc_name, cmds in commands_by_bc.items()])
+
+        bc_text = "\n".join([f"- {bc.name}: {bc.description}" for bc in bc_candidates])
+
+        prompt = IDENTIFY_POLICIES_PROMPT.format(events=events_text, commands_by_bc=commands_text, bounded_contexts=bc_text)
+
         structured_llm = llm.with_structured_output(PolicyList)
-        
+
         try:
             provider = os.getenv("LLM_PROVIDER", "openai")
             model = os.getenv("LLM_MODEL", "gpt-4o")
@@ -947,19 +868,13 @@ async def run_ingestion_workflow(
                 )
 
             t_llm0 = time.perf_counter()
-            pol_response = structured_llm.invoke(
-                [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
-            )
+            pol_response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
             llm_ms = int((time.perf_counter() - t_llm0) * 1000)
             policies = pol_response.policies
 
             if AI_AUDIT_LOG_ENABLED:
                 try:
-                    resp_dump = (
-                        pol_response.model_dump()
-                        if hasattr(pol_response, "model_dump")
-                        else pol_response.dict()
-                    )
+                    resp_dump = pol_response.model_dump() if hasattr(pol_response, "model_dump") else pol_response.dict()
                 except Exception:
                     resp_dump = {"__type__": type(pol_response).__name__, "__repr__": repr(pol_response)[:1000]}
                 SmartLogger.log(
@@ -986,19 +901,18 @@ async def run_ingestion_workflow(
                 params={"session_id": session.id, "error": str(e)},
             )
             policies = []
-        
+
         for pol in policies:
-            # Find trigger event and invoke command IDs
             trigger_event_id = None
             invoke_command_id = None
             target_bc_id = None
-            
-            for agg_id, events in all_events.items():
+
+            for events in all_events.values():
                 for evt in events:
                     if evt.name == pol.trigger_event:
                         trigger_event_id = evt.id
                         break
-            
+
             for bc in bc_candidates:
                 if bc.name == pol.target_bc or bc.id == pol.target_bc:
                     target_bc_id = bc.id
@@ -1007,7 +921,7 @@ async def run_ingestion_workflow(
                             if cmd.name == pol.invoke_command:
                                 invoke_command_id = cmd.id
                                 break
-            
+
             if trigger_event_id and invoke_command_id and target_bc_id:
                 try:
                     client.create_policy(
@@ -1016,22 +930,14 @@ async def run_ingestion_workflow(
                         bc_id=target_bc_id,
                         trigger_event_id=trigger_event_id,
                         invoke_command_id=invoke_command_id,
-                        description=pol.description
+                        description=pol.description,
                     )
-                    
+
                     yield ProgressEvent(
                         phase=IngestionPhase.IDENTIFYING_POLICIES,
                         message=f"Policy 생성: {pol.name}",
                         progress=95,
-                        data={
-                            "type": "Policy",
-                            "object": {
-                                "id": pol.id,
-                                "name": pol.name,
-                                "type": "Policy",
-                                "parentId": target_bc_id
-                            }
-                        }
+                        data={"type": "Policy", "object": {"id": pol.id, "name": pol.name, "type": "Policy", "parentId": target_bc_id}},
                     )
                 except Exception as e:
                     SmartLogger.log(
@@ -1040,7 +946,7 @@ async def run_ingestion_workflow(
                         category="ingestion.neo4j.policy",
                         params={"session_id": session.id, "policy_id": pol.id, "error": str(e)},
                     )
-        
+
         # Complete
         yield ProgressEvent(
             phase=IngestionPhase.COMPLETE,
@@ -1053,9 +959,9 @@ async def run_ingestion_workflow(
                     "aggregates": sum(len(aggs) for aggs in all_aggregates.values()),
                     "commands": sum(len(cmds) for cmds in all_commands.values()),
                     "events": sum(len(evts) for evts in all_events.values()),
-                    "policies": len(policies)
+                    "policies": len(policies),
                 }
-            }
+            },
         )
         SmartLogger.log(
             "INFO",
@@ -1071,15 +977,10 @@ async def run_ingestion_workflow(
                 "policies": len(policies),
             },
         )
-        
+
     except Exception as e:
         SmartLogger.log("ERROR", "Ingestion workflow failed", category="ingestion.workflow", params={"session_id": session.id, "error": str(e)})
-        yield ProgressEvent(
-            phase=IngestionPhase.ERROR,
-            message=f"❌ 오류 발생: {str(e)}",
-            progress=0,
-            data={"error": str(e)}
-        )
+        yield ProgressEvent(phase=IngestionPhase.ERROR, message=f"❌ 오류 발생: {str(e)}", progress=0, data={"error": str(e)})
 
 
 # =============================================================================
@@ -1095,11 +996,10 @@ async def upload_document(
 ) -> dict[str, Any]:
     """
     Upload a requirements document (text or PDF) to start ingestion.
-    
     Returns a session_id for SSE streaming of progress.
     """
     content = ""
-    
+
     if file:
         file_content = await file.read()
         filename = file.filename or ""
@@ -1126,35 +1026,23 @@ async def upload_document(
             category="ingestion.api.upload",
             params={"filename": filename, "bytes": len(file_content)},
         )
-        
-        if filename.lower().endswith('.pdf'):
+
+        if filename.lower().endswith(".pdf"):
             content = extract_text_from_pdf(file_content)
         else:
-            # Assume text file
             try:
-                content = file_content.decode('utf-8')
+                content = file_content.decode("utf-8")
             except UnicodeDecodeError:
-                content = file_content.decode('latin-1')
+                content = file_content.decode("latin-1")
     elif text:
         content = text
         SmartLogger.log(
             "INFO",
             "Ingestion upload received (text): starting ingestion session from raw text.",
             category="ingestion.api.upload.inputs",
-            params={
-                **http_context(request),
-                "inputs": {
-                    "text": summarize_for_log(text),
-                    "text_sha256": sha256_text(text),
-                },
-            },
+            params={**http_context(request), "inputs": {"text": summarize_for_log(text), "text_sha256": sha256_text(text)}},
         )
-        SmartLogger.log(
-            "INFO",
-            "Upload received (text)",
-            category="ingestion.api.upload",
-            params={"chars": len(content)},
-        )
+        SmartLogger.log("INFO", "Upload received (text)", category="ingestion.api.upload", params={"chars": len(content)})
     else:
         SmartLogger.log(
             "WARNING",
@@ -1162,11 +1050,8 @@ async def upload_document(
             category="ingestion.api.upload.invalid",
             params=http_context(request),
         )
-        raise HTTPException(
-            status_code=400,
-            detail="Either 'file' or 'text' must be provided"
-        )
-    
+        raise HTTPException(status_code=400, detail="Either 'file' or 'text' must be provided")
+
     if not content.strip():
         SmartLogger.log(
             "WARNING",
@@ -1174,27 +1059,18 @@ async def upload_document(
             category="ingestion.api.upload.empty",
             params={**http_context(request), "content_len": len(content)},
         )
-        raise HTTPException(
-            status_code=400,
-            detail="Document content is empty"
-        )
+        raise HTTPException(status_code=400, detail="Document content is empty")
 
-    # Log reproducible fingerprint of the content without dumping the entire document.
     SmartLogger.log(
         "INFO",
         "Ingestion content prepared: extracted text ready for workflow.",
         category="ingestion.api.upload.content",
         params={
             **http_context(request),
-            "content": {
-                "len": len(content),
-                "sha256": sha256_text(content),
-                "preview": summarize_for_log(content),
-            },
+            "content": {"len": len(content), "sha256": sha256_text(content), "preview": summarize_for_log(content)},
         },
     )
-    
-    # Create session
+
     session = create_session()
     session.content = content
     SmartLogger.log(
@@ -1203,23 +1079,18 @@ async def upload_document(
         category="ingestion.api.upload",
         params={"session_id": session.id, "content_length": len(content)},
     )
-    
-    return {
-        "session_id": session.id,
-        "content_length": len(content),
-        "preview": content[:500] + "..." if len(content) > 500 else content
-    }
+
+    return {"session_id": session.id, "content_length": len(content), "preview": content[:500] + "..." if len(content) > 500 else content}
 
 
 @router.get("/stream/{session_id}")
 async def stream_progress(session_id: str, request: Request):
     """
     SSE endpoint for streaming ingestion progress.
-    
     Client should connect after receiving session_id from /upload.
     """
     session = get_session(session_id)
-    
+
     if not session:
         SmartLogger.log(
             "WARNING",
@@ -1228,13 +1099,14 @@ async def stream_progress(session_id: str, request: Request):
             params={**http_context(request), "inputs": {"session_id": session_id}, "active_sessions": len(_sessions)},
         )
         raise HTTPException(status_code=404, detail="Session not found")
+
     SmartLogger.log(
         "INFO",
         "Ingestion stream connected: starting SSE progress events for workflow execution.",
         category="ingestion.api.stream.connected",
         params={**http_context(request), "inputs": {"session_id": session_id}},
     )
-    
+
     async def event_generator():
         SmartLogger.log(
             "INFO",
@@ -1244,12 +1116,8 @@ async def stream_progress(session_id: str, request: Request):
         )
         async for event in run_ingestion_workflow(session, session.content):
             add_event(session, event)
-            yield {
-                "event": "progress",
-                "data": event.model_dump_json()
-            }
-        
-        # Clean up session after completion
+            yield {"event": "progress", "data": event.model_dump_json()}
+
         if session_id in _sessions:
             del _sessions[session_id]
         SmartLogger.log(
@@ -1258,40 +1126,32 @@ async def stream_progress(session_id: str, request: Request):
             category="ingestion.api.stream.cleaned",
             params={**http_context(request), "inputs": {"session_id": session_id}},
         )
-    
+
     return EventSourceResponse(event_generator())
 
 
 @router.get("/sessions")
 async def list_sessions(request: Request) -> list[dict[str, Any]]:
     """List all active ingestion sessions."""
+
     SmartLogger.log(
         "INFO",
         "List ingestion sessions: returning in-memory active sessions.",
         category="ingestion.api.sessions.request",
         params={**http_context(request), "active": len(_sessions)},
     )
-    return [
-        {
-            "id": s.id,
-            "status": s.status.value,
-            "progress": s.progress,
-            "message": s.message
-        }
-        for s in _sessions.values()
-    ]
+    return [{"id": s.id, "status": s.status.value, "progress": s.progress, "message": s.message} for s in _sessions.values()]
 
 
 @router.delete("/clear-all")
 async def clear_all_data(request: Request) -> dict[str, Any]:
     """
-    Clear all nodes and relationships from Neo4j.
-    Used before starting a fresh ingestion.
+    Clear all nodes and relationships from Neo4j. Used before starting a fresh ingestion.
     """
     from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
-    
+
     client = get_neo4j_client()
-    
+
     try:
         SmartLogger.log(
             "WARNING",
@@ -1300,7 +1160,6 @@ async def clear_all_data(request: Request) -> dict[str, Any]:
             params=http_context(request),
         )
         with client.session() as session:
-            # Get counts before deletion
             count_query = """
             MATCH (n)
             WITH labels(n)[0] as label, count(n) as count
@@ -1309,8 +1168,7 @@ async def clear_all_data(request: Request) -> dict[str, Any]:
             result = session.run(count_query)
             record = result.single()
             before_counts = {item["label"]: item["count"] for item in record["counts"]} if record else {}
-            
-            # Delete all nodes and relationships
+
             delete_query = """
             MATCH (n)
             DETACH DELETE n
@@ -1322,12 +1180,8 @@ async def clear_all_data(request: Request) -> dict[str, Any]:
                 category="ingestion.api.clear_all.done",
                 params={**http_context(request), "deleted": before_counts},
             )
-            
-            return {
-                "success": True,
-                "message": "모든 데이터가 삭제되었습니다",
-                "deleted": before_counts
-            }
+
+            return {"success": True, "message": "모든 데이터가 삭제되었습니다", "deleted": before_counts}
     except Exception as e:
         SmartLogger.log(
             "ERROR",
@@ -1335,11 +1189,7 @@ async def clear_all_data(request: Request) -> dict[str, Any]:
             category="ingestion.api.clear_all.error",
             params={**http_context(request), "error": {"type": type(e).__name__, "message": str(e)}},
         )
-        return {
-            "success": False,
-            "message": f"삭제 실패: {str(e)}",
-            "deleted": {}
-        }
+        return {"success": False, "message": f"삭제 실패: {str(e)}", "deleted": {}}
 
 
 @router.get("/stats")
@@ -1348,9 +1198,9 @@ async def get_data_stats(request: Request) -> dict[str, Any]:
     Get current data statistics from Neo4j.
     """
     from api.features.ingestion.event_storming.neo4j_client import get_neo4j_client
-    
+
     client = get_neo4j_client()
-    
+
     try:
         SmartLogger.log(
             "INFO",
@@ -1367,7 +1217,7 @@ async def get_data_stats(request: Request) -> dict[str, Any]:
             result = session.run(query)
             record = result.single()
             counts = {item["label"]: item["count"] for item in record["counts"]} if record else {}
-            
+
             total = sum(counts.values())
             SmartLogger.log(
                 "INFO",
@@ -1375,12 +1225,8 @@ async def get_data_stats(request: Request) -> dict[str, Any]:
                 category="ingestion.api.stats.done",
                 params={**http_context(request), "total": total, "counts": counts},
             )
-            
-            return {
-                "total": total,
-                "counts": counts,
-                "hasData": total > 0
-            }
+
+            return {"total": total, "counts": counts, "hasData": total > 0}
     except Exception as e:
         SmartLogger.log(
             "ERROR",
@@ -1388,10 +1234,6 @@ async def get_data_stats(request: Request) -> dict[str, Any]:
             category="ingestion.api.stats.error",
             params={**http_context(request), "error": {"type": type(e).__name__, "message": str(e)}},
         )
-        return {
-            "total": 0,
-            "counts": {},
-            "hasData": False,
-            "error": str(e)
-        }
+        return {"total": 0, "counts": {}, "hasData": False, "error": str(e)}
+
 

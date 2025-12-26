@@ -5,7 +5,7 @@ import importlib.util
 import os
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Protocol
 
 
 class _SmartLoggerLike(Protocol):
@@ -46,7 +46,7 @@ def _load_smart_logger_from_module(module_path: str) -> type[_SmartLoggerLike]:
     if cls is None:
         raise ImportError(f"`SmartLogger` not found in module: {module_path}")
     if not hasattr(cls, "log") or not callable(getattr(cls, "log")):
-        raise TypeError(f"`SmartLogger.log` missing or not callable in module: {module_path}")
+        raise TypeError(f"`SmartLogger.log` missing or not callable in {module_path}")
     return cls
 
 
@@ -84,6 +84,7 @@ def _resolve_impl() -> tuple[type[_SmartLoggerLike], str]:
 
     return _FallbackLogger, "fallback(print)"
 
+
 _IMPL, _IMPL_SOURCE = _resolve_impl()
 
 
@@ -115,3 +116,5 @@ class SmartLogger:
             cat = f"[{category}] " if category else ""
             print(f"{level}: {cat}{message}")
             print(f"LOGGER_ERROR: {err}")
+
+

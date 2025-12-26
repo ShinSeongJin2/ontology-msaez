@@ -17,8 +17,13 @@ from starlette.requests import Request
 from starlette.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.smart_logger import SmartLogger
-from api.request_logging import RequestTimer, http_context, new_request_id, set_request_id
+from api.platform.observability.request_logging import (
+    RequestTimer,
+    http_context,
+    new_request_id,
+    set_request_id,
+)
+from api.platform.observability.smart_logger import SmartLogger
 from api.platform.neo4j import init_neo4j_driver, close_neo4j_driver
 
 @asynccontextmanager
@@ -108,23 +113,23 @@ async def _request_id_middleware(request: Request, call_next):
         set_request_id(None)
 
 # Include ingestion router
-from api.ingestion import router as ingestion_router
+from api.features.ingestion.router import router as ingestion_router
 app.include_router(ingestion_router)
 
 # Include change management router
-from api.change import router as change_router
+from api.features.change_management.router import router as change_router
 app.include_router(change_router)
 
 # Include chat-based model modification router
-from api.chat import router as chat_router
+from api.features.model_modifier.router import router as chat_router
 app.include_router(chat_router)
 
 # Include PRD generator router
-from api.prd_generator import router as prd_router
+from api.features.prd_generation.router import router as prd_router
 app.include_router(prd_router)
 
 # Include user story add/apply router
-from api.user_story import router as user_story_router
+from api.features.user_stories.authoring_router import router as user_story_router
 app.include_router(user_story_router)
 
 

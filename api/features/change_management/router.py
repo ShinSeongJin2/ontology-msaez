@@ -1,31 +1,24 @@
 """
-Change Management API for User Story Editing with Impact Analysis
+Change Management API (feature router)
 
-Provides endpoints for:
 - Impact analysis when a User Story is modified
-- LLM-based change plan generation with LangGraph workflow
+- LLM-based change plan generation (LangGraph workflow)
 - Vector search for related objects across BCs
 - Human-in-the-loop plan revision
 - Applying approved changes to Neo4j
-
-The workflow now supports:
-1. Scope analysis: Determine if change is LOCAL, CROSS_BC, or NEW_CAPABILITY
-2. Vector search: Find semantically related objects when cross-BC connections are needed
-3. Plan generation: Create comprehensive change plan including new connections
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any, Optional, List
 
 from fastapi import APIRouter, HTTPException
-from starlette.requests import Request
 from pydantic import BaseModel, Field
+from starlette.requests import Request
 
 from api.platform.neo4j import get_session
-from api.smart_logger import SmartLogger
-from api.request_logging import http_context, summarize_for_log
+from api.platform.observability.request_logging import http_context, summarize_for_log
+from api.platform.observability.smart_logger import SmartLogger
 
 router = APIRouter(prefix="/api/change", tags=["change"])
 
@@ -37,6 +30,7 @@ router = APIRouter(prefix="/api/change", tags=["change"])
 
 class UserStoryEdit(BaseModel):
     """Edited user story data."""
+
     role: str
     action: str
     benefit: Optional[str] = None
@@ -45,6 +39,7 @@ class UserStoryEdit(BaseModel):
 
 class ChangePlanRequest(BaseModel):
     """Request for generating or revising a change plan."""
+
     userStoryId: str
     originalUserStory: Optional[dict] = None
     editedUserStory: dict
@@ -55,6 +50,7 @@ class ChangePlanRequest(BaseModel):
 
 class ChangeItem(BaseModel):
     """A single change in the plan."""
+
     action: str  # rename, update, create, delete
     targetType: str  # Aggregate, Command, Event, Policy
     targetId: str
@@ -67,12 +63,14 @@ class ChangeItem(BaseModel):
 
 class ChangePlanResponse(BaseModel):
     """Response containing the generated change plan."""
+
     changes: List[dict]
     summary: str
 
 
 class VectorSearchRequest(BaseModel):
     """Request for vector search of related objects."""
+
     query: str
     nodeTypes: List[str] = Field(default_factory=lambda: ["Command", "Event", "Policy", "Aggregate"])
     excludeIds: List[str] = Field(default_factory=list)
@@ -81,6 +79,7 @@ class VectorSearchRequest(BaseModel):
 
 class VectorSearchResult(BaseModel):
     """A single result from vector search."""
+
     id: str
     name: str
     type: str
@@ -92,6 +91,7 @@ class VectorSearchResult(BaseModel):
 
 class ApplyChangesRequest(BaseModel):
     """Request to apply approved changes."""
+
     userStoryId: str
     editedUserStory: dict
     changePlan: List[dict]
@@ -99,6 +99,7 @@ class ApplyChangesRequest(BaseModel):
 
 class ApplyChangesResponse(BaseModel):
     """Response after applying changes."""
+
     success: bool
     appliedChanges: List[dict]
     errors: List[str] = Field(default_factory=list)
@@ -113,11 +114,11 @@ class ApplyChangesResponse(BaseModel):
 async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str, Any]:
     """
     Analyze the impact of changing a User Story.
-    
+
     Returns:
     - The original user story
     - All connected objects (Aggregate, Command, Event) that may need updates
-    
+
     This follows multiple relationship paths:
     1. Direct IMPLEMENTS from UserStory to any node
     2. Through BoundedContext hierarchy
@@ -132,38 +133,38 @@ async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str,
     # Query to get the user story and all connected objects
     query = """
     MATCH (us:UserStory {id: $user_story_id})
-    
+
     // Path 1: Direct IMPLEMENTS relationships
     OPTIONAL MATCH (us)-[:IMPLEMENTS]->(directTarget)
     WHERE directTarget:Aggregate OR directTarget:Command OR directTarget:Event OR directTarget:BoundedContext
-    
+
     // Path 2: Through BoundedContext - find the BC this user story belongs to
     OPTIONAL MATCH (us)-[:IMPLEMENTS]->(bc:BoundedContext)
     OPTIONAL MATCH (bc)-[:HAS_AGGREGATE]->(bcAgg:Aggregate)
     OPTIONAL MATCH (bcAgg)-[:HAS_COMMAND]->(bcCmd:Command)
     OPTIONAL MATCH (bcCmd)-[:EMITS]->(bcEvt:Event)
-    
+
     // Path 3: If user story implements an aggregate, get its commands and events
     OPTIONAL MATCH (us)-[:IMPLEMENTS]->(usAgg:Aggregate)
     OPTIONAL MATCH (usAgg)-[:HAS_COMMAND]->(usAggCmd:Command)
     OPTIONAL MATCH (usAggCmd)-[:EMITS]->(usAggEvt:Event)
-    
+
     // Path 4: If user story implements a command, get its events
     OPTIONAL MATCH (us)-[:IMPLEMENTS]->(usCmd:Command)
     OPTIONAL MATCH (usCmd)-[:EMITS]->(usCmdEvt:Event)
     OPTIONAL MATCH (usAggParent:Aggregate)-[:HAS_COMMAND]->(usCmd)
-    
+
     WITH us,
          collect(DISTINCT bc) as bcs,
          collect(DISTINCT bcAgg) + collect(DISTINCT usAgg) + collect(DISTINCT usAggParent) as allAggs,
          collect(DISTINCT bcCmd) + collect(DISTINCT usAggCmd) + collect(DISTINCT usCmd) as allCmds,
          collect(DISTINCT bcEvt) + collect(DISTINCT usAggEvt) + collect(DISTINCT usCmdEvt) as allEvts
-    
+
     // Get the first BC (user story typically belongs to one BC)
-    WITH us, 
+    WITH us,
          CASE WHEN size(bcs) > 0 THEN bcs[0] ELSE null END as bc,
          allAggs, allCmds, allEvts
-    
+
     RETURN {
         id: us.id,
         role: us.role,
@@ -177,7 +178,7 @@ async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str,
     [c IN allCmds WHERE c IS NOT NULL | c {.id, .name, .actor, type: 'Command'}] as commands,
     [e IN allEvts WHERE e IS NOT NULL | e {.id, .name, .version, type: 'Event'}] as events
     """
-    
+
     with get_session() as session:
         SmartLogger.log(
             "INFO",
@@ -187,7 +188,7 @@ async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str,
         )
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
-        
+
         if not record:
             SmartLogger.log(
                 "WARNING",
@@ -196,32 +197,28 @@ async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str,
                 params={**http_context(request), "user_story_id": user_story_id},
             )
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
-        
+
         user_story = dict(record["userStory"])
         bounded_context = dict(record["boundedContext"]) if record["boundedContext"] else None
-        
+
         # Collect all impacted nodes
-        impacted_nodes = []
-        
-        # Add aggregates (deduplicated)
+        impacted_nodes: list[dict] = []
+
+        # Add aggregates/commands/events (deduplicated)
         seen_ids = set()
         for agg in record["aggregates"]:
             if agg and agg["id"] not in seen_ids:
                 impacted_nodes.append(dict(agg))
                 seen_ids.add(agg["id"])
-        
-        # Add commands (deduplicated)
         for cmd in record["commands"]:
             if cmd and cmd["id"] not in seen_ids:
                 impacted_nodes.append(dict(cmd))
                 seen_ids.add(cmd["id"])
-        
-        # Add events (deduplicated)
         for evt in record["events"]:
             if evt and evt["id"] not in seen_ids:
                 impacted_nodes.append(dict(evt))
                 seen_ids.add(evt["id"])
-        
+
         SmartLogger.log(
             "INFO",
             "Impact analysis computed: impacted nodes deduplicated and returned.",
@@ -233,44 +230,25 @@ async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str,
                 "impactedNodes": len(impacted_nodes),
             },
         )
-        return {
-            "userStory": user_story,
-            "boundedContext": bounded_context,
-            "impactedNodes": impacted_nodes
-        }
+        return {"userStory": user_story, "boundedContext": bounded_context, "impactedNodes": impacted_nodes}
 
 
 @router.post("/plan")
 async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> dict[str, Any]:
     """
     Generate a change plan using LangGraph-based workflow.
-    
-    This endpoint uses a multi-step workflow:
-    1. Analyze scope: Determine if change is LOCAL, CROSS_BC, or NEW_CAPABILITY
-    2. Vector search: If CROSS_BC, search for related objects in other BCs
-    3. Generate plan: Create comprehensive plan including new connections
-    
-    If feedback is provided, it will revise the previous plan.
-    
+
     Returns:
-    - scope: The determined scope of the change
-    - scopeReasoning: Why this scope was determined
-    - keywords: Keywords used for vector search
-    - relatedObjects: Objects found via vector search (for CROSS_BC)
-    - changes: The proposed changes
-    - summary: Summary of the plan
+    - scope, scopeReasoning, keywords, relatedObjects, changes, summary
     """
     from api.features.change_management.planning_agent.change_graph import run_change_planning
-    
+
     try:
         SmartLogger.log(
             "INFO",
             "Generate change plan called: capturing full router inputs for reproducibility.",
             category="change.plan.inputs",
-            params={
-                **http_context(request),
-                "inputs": summarize_for_log(payload.model_dump(by_alias=True)),
-            },
+            params={**http_context(request), "inputs": summarize_for_log(payload.model_dump(by_alias=True))},
         )
         SmartLogger.log(
             "INFO",
@@ -289,7 +267,7 @@ async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> 
             edited_user_story=payload.editedUserStory,
             connected_objects=payload.impactedNodes,
             feedback=payload.feedback,
-            previous_plan=payload.previousPlan
+            previous_plan=payload.previousPlan,
         )
         SmartLogger.log(
             "INFO",
@@ -323,11 +301,12 @@ async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> 
         except Exception:
             # Never break the endpoint due to logging.
             pass
-        
+
         return result
-        
+
     except Exception as e:
         import traceback
+
         SmartLogger.log(
             "ERROR",
             "Failed to generate change plan",
@@ -346,24 +325,16 @@ async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> 
 async def apply_changes(payload: ApplyChangesRequest, request: Request) -> ApplyChangesResponse:
     """
     Apply the approved change plan to Neo4j.
-    
-    Steps:
-    1. Update the user story with new values
-    2. Apply each change in the plan (rename, update, etc.)
-    3. Return results of applied changes
     """
-    applied_changes = []
-    errors = []
+    applied_changes: list[dict[str, Any]] = []
+    errors: list[str] = []
     SmartLogger.log(
         "INFO",
         "Apply changes requested: capturing full router inputs for reproducibility.",
         category="change.apply.inputs",
-        params={
-            **http_context(request),
-            "inputs": summarize_for_log(payload.model_dump(by_alias=True)),
-        },
+        params={**http_context(request), "inputs": summarize_for_log(payload.model_dump(by_alias=True))},
     )
-    
+
     with get_session() as session:
         # Step 1: Update the user story
         try:
@@ -382,12 +353,9 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                 action=payload.editedUserStory.get("action"),
                 benefit=payload.editedUserStory.get("benefit"),
             )
-            applied_changes.append({
-                "action": "update",
-                "targetType": "UserStory",
-                "targetId": payload.userStoryId,
-                "success": True
-            })
+            applied_changes.append(
+                {"action": "update", "targetType": "UserStory", "targetId": payload.userStoryId, "success": True}
+            )
             SmartLogger.log(
                 "INFO",
                 "User story updated: new role/action/benefit written to Neo4j.",
@@ -406,7 +374,7 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                 category="change.apply.user_story.error",
                 params={**http_context(request), "userStoryId": payload.userStoryId, "error": str(e)},
             )
-        
+
         # Step 2: Apply each change in the plan
         for idx, change in enumerate(payload.changePlan):
             try:
@@ -423,31 +391,21 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                     },
                 )
                 if change.get("action") == "rename":
-                    # Rename a node
                     rename_query = """
                     MATCH (n {id: $node_id})
                     SET n.name = $new_name, n.updatedAt = datetime()
                     RETURN n.id as id
                     """
-                    session.run(
-                        rename_query,
-                        node_id=change.get("targetId"),
-                        new_name=change.get("to")
-                    )
-                    applied_changes.append({
-                        **change,
-                        "success": True
-                    })
+                    session.run(rename_query, node_id=change.get("targetId"), new_name=change.get("to"))
+                    applied_changes.append({**change, "success": True})
                     SmartLogger.log(
                         "INFO",
                         "Applied change item: node renamed successfully.",
                         category="change.apply.item.renamed",
                         params={**http_context(request), "change": summarize_for_log(change)},
                     )
-                    
+
                 elif change.get("action") == "update":
-                    # Update node properties
-                    # Build dynamic property update
                     update_query = """
                     MATCH (n {id: $node_id})
                     SET n.description = $description, n.updatedAt = datetime()
@@ -456,26 +414,22 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                     session.run(
                         update_query,
                         node_id=change.get("targetId"),
-                        description=change.get("description", "")
+                        description=change.get("description", ""),
                     )
-                    applied_changes.append({
-                        **change,
-                        "success": True
-                    })
+                    applied_changes.append({**change, "success": True})
                     SmartLogger.log(
                         "INFO",
                         "Applied change item: node updated successfully.",
                         category="change.apply.item.updated",
                         params={**http_context(request), "change": summarize_for_log(change)},
                     )
-                    
+
                 elif change.get("action") == "create":
-                    # Create a new node based on type
                     target_type = change.get("targetType")
                     target_id = change.get("targetId")
                     target_name = change.get("targetName")
                     target_bc_id = change.get("targetBcId")
-                    
+
                     if target_type == "Policy":
                         create_query = """
                         MERGE (pol:Policy {id: $pol_id})
@@ -493,7 +447,7 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                             pol_id=target_id,
                             name=target_name,
                             description=change.get("description", ""),
-                            bc_id=target_bc_id
+                            bc_id=target_bc_id,
                         )
                     elif target_type == "Command":
                         create_query = """
@@ -507,7 +461,7 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                             create_query,
                             cmd_id=target_id,
                             name=target_name,
-                            description=change.get("description", "")
+                            description=change.get("description", ""),
                         )
                     elif target_type == "Event":
                         create_query = """
@@ -522,35 +476,34 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                             create_query,
                             evt_id=target_id,
                             name=target_name,
-                            description=change.get("description", "")
+                            description=change.get("description", ""),
                         )
                     else:
                         SmartLogger.log(
                             "WARNING",
                             "Create change item used an unsupported targetType: no node was created.",
                             category="change.apply.item.create.unsupported",
-                            params={**http_context(request), "targetType": target_type, "change": summarize_for_log(change)},
+                            params={
+                                **http_context(request),
+                                "targetType": target_type,
+                                "change": summarize_for_log(change),
+                            },
                         )
-                    
-                    applied_changes.append({
-                        **change,
-                        "success": True
-                    })
+
+                    applied_changes.append({**change, "success": True})
                     SmartLogger.log(
                         "INFO",
                         "Applied change item: node create attempted.",
                         category="change.apply.item.created",
                         params={**http_context(request), "change": summarize_for_log(change)},
                     )
-                    
+
                 elif change.get("action") == "connect":
-                    # Create a connection between nodes
                     connection_type = change.get("connectionType", "TRIGGERS")
                     source_id = change.get("sourceId")
                     target_id = change.get("targetId")
-                    
+
                     if connection_type == "TRIGGERS":
-                        # Event -> TRIGGERS -> Policy
                         connect_query = """
                         MATCH (evt:Event {id: $source_id})
                         MATCH (pol:Policy {id: $target_id})
@@ -559,7 +512,6 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                         """
                         session.run(connect_query, source_id=source_id, target_id=target_id)
                     elif connection_type == "INVOKES":
-                        # Policy -> INVOKES -> Command
                         connect_query = """
                         MATCH (pol:Policy {id: $source_id})
                         MATCH (cmd:Command {id: $target_id})
@@ -568,7 +520,6 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                         """
                         session.run(connect_query, source_id=source_id, target_id=target_id)
                     elif connection_type == "IMPLEMENTS":
-                        # UserStory -> IMPLEMENTS -> Node
                         connect_query = """
                         MATCH (us:UserStory {id: $source_id})
                         MATCH (n {id: $target_id})
@@ -581,35 +532,29 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                             "WARNING",
                             "Connect change item used an unsupported connectionType: no relationship was created.",
                             category="change.apply.item.connect.unsupported",
-                            params={**http_context(request), "connectionType": connection_type, "change": summarize_for_log(change)},
+                            params={
+                                **http_context(request),
+                                "connectionType": connection_type,
+                                "change": summarize_for_log(change),
+                            },
                         )
-                    
-                    applied_changes.append({
-                        **change,
-                        "success": True
-                    })
+
+                    applied_changes.append({**change, "success": True})
                     SmartLogger.log(
                         "INFO",
                         "Applied change item: relationship connect attempted.",
                         category="change.apply.item.connected",
                         params={**http_context(request), "change": summarize_for_log(change)},
                     )
-                    
+
                 elif change.get("action") == "delete":
-                    # Delete a node (soft delete or actual delete)
                     delete_query = """
                     MATCH (n {id: $node_id})
                     SET n.deleted = true, n.deletedAt = datetime()
                     RETURN n.id as id
                     """
-                    session.run(
-                        delete_query,
-                        node_id=change.get("targetId")
-                    )
-                    applied_changes.append({
-                        **change,
-                        "success": True
-                    })
+                    session.run(delete_query, node_id=change.get("targetId"))
+                    applied_changes.append({**change, "success": True})
                     SmartLogger.log(
                         "INFO",
                         "Applied change item: node soft-deleted successfully.",
@@ -623,14 +568,10 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                         category="change.apply.item.unsupported",
                         params={**http_context(request), "change": summarize_for_log(change)},
                     )
-                    
+
             except Exception as e:
                 errors.append(f"Failed to apply {change.get('action')} on {change.get('targetId')}: {str(e)}")
-                applied_changes.append({
-                    **change,
-                    "success": False,
-                    "error": str(e)
-                })
+                applied_changes.append({**change, "success": False, "error": str(e)})
                 SmartLogger.log(
                     "ERROR",
                     "Failed to apply change item",
@@ -643,7 +584,7 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
                         "error": str(e),
                     },
                 )
-    
+
     SmartLogger.log(
         "INFO",
         "Apply changes completed",
@@ -655,18 +596,11 @@ async def apply_changes(payload: ApplyChangesRequest, request: Request) -> Apply
             "errors": len(errors),
         },
     )
-    return ApplyChangesResponse(
-        success=len(errors) == 0,
-        appliedChanges=applied_changes,
-        errors=errors
-    )
+    return ApplyChangesResponse(success=len(errors) == 0, appliedChanges=applied_changes, errors=errors)
 
 
 @router.get("/history/{user_story_id}")
 async def get_change_history(user_story_id: str, request: Request) -> list[dict[str, Any]]:
-    """
-    Get the change history for a user story.
-    """
     query = """
     MATCH (us:UserStory {id: $user_story_id})
     OPTIONAL MATCH (us)-[r:CHANGED_TO]->(version)
@@ -674,7 +608,7 @@ async def get_change_history(user_story_id: str, request: Request) -> list[dict[
            collect(version {.*, changedAt: r.changedAt}) as history
     ORDER BY r.changedAt DESC
     """
-    
+
     with get_session() as session:
         SmartLogger.log(
             "INFO",
@@ -684,7 +618,7 @@ async def get_change_history(user_story_id: str, request: Request) -> list[dict[
         )
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
-        
+
         if not record:
             SmartLogger.log(
                 "WARNING",
@@ -693,20 +627,13 @@ async def get_change_history(user_story_id: str, request: Request) -> list[dict[
                 params={**http_context(request), "inputs": {"user_story_id": user_story_id}},
             )
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
-        
-        payload = {
-            "current": dict(record["current"]) if record["current"] else None,
-            "history": [dict(h) for h in record["history"]]
-        }
+
+        payload = {"current": dict(record["current"]) if record["current"] else None, "history": [dict(h) for h in record["history"]]}
         SmartLogger.log(
             "INFO",
             "Change history returned.",
             category="change.history.done",
-            params={
-                **http_context(request),
-                "user_story_id": user_story_id,
-                "versions": len(payload.get("history") or []),
-            },
+            params={**http_context(request), "user_story_id": user_story_id, "versions": len(payload.get("history") or [])},
         )
         return payload
 
@@ -715,12 +642,6 @@ async def get_change_history(user_story_id: str, request: Request) -> list[dict[
 async def vector_search(payload: VectorSearchRequest, request: Request) -> List[VectorSearchResult]:
     """
     Search for related objects using semantic/keyword matching.
-    
-    This is useful for:
-    - Finding objects in other BCs that might be relevant to a change
-    - Discovering existing capabilities (like Notification) that can be connected
-    
-    Returns objects sorted by similarity score.
     """
     query = """
     UNWIND $keywords as keyword
@@ -730,21 +651,21 @@ async def vector_search(payload: VectorSearchRequest, request: Request) -> List[
     )
     AND (n:Command OR n:Event OR n:Policy OR n:Aggregate)
     AND (
-        toLower(n.name) CONTAINS toLower(keyword) 
+        toLower(n.name) CONTAINS toLower(keyword)
         OR toLower(coalesce(n.description, '')) CONTAINS toLower(keyword)
     )
     AND NOT n.id IN $excludeIds
-    
+
     // Get the BC for each node
     OPTIONAL MATCH (bc:BoundedContext)-[:HAS_AGGREGATE|HAS_POLICY*1..3]->(n)
-    
+
     WITH DISTINCT n, bc,
-         CASE 
+         CASE
              WHEN toLower(n.name) CONTAINS toLower($primary_keyword) THEN 1.0
              WHEN toLower(n.name) CONTAINS toLower($query) THEN 0.9
              ELSE 0.7
          END as score
-    
+
     RETURN {
         id: n.id,
         name: n.name,
@@ -757,8 +678,7 @@ async def vector_search(payload: VectorSearchRequest, request: Request) -> List[
     ORDER BY score DESC
     LIMIT $limit
     """
-    
-    # Extract keywords from query
+
     SmartLogger.log(
         "INFO",
         "Vector search requested: capturing router inputs for reproducibility.",
@@ -788,7 +708,7 @@ async def vector_search(payload: VectorSearchRequest, request: Request) -> List[
             "excludeIds_count": len(payload.excludeIds or []),
         },
     )
-    
+
     with get_session() as session:
         result = session.run(
             query,
@@ -797,25 +717,27 @@ async def vector_search(payload: VectorSearchRequest, request: Request) -> List[
             query=payload.query,
             nodeTypes=payload.nodeTypes if payload.nodeTypes else None,
             excludeIds=payload.excludeIds,
-            limit=payload.limit
+            limit=payload.limit,
         )
-        
-        results = []
+
+        results: list[VectorSearchResult] = []
         seen_ids = set()
         for record in result:
             obj = record["result"]
             if obj["id"] and obj["id"] not in seen_ids:
                 seen_ids.add(obj["id"])
-                results.append(VectorSearchResult(
-                    id=obj["id"],
-                    name=obj["name"],
-                    type=obj["type"],
-                    bcId=obj.get("bcId"),
-                    bcName=obj.get("bcName"),
-                    similarity=obj.get("similarity", 0.5),
-                    description=obj.get("description")
-                ))
-        
+                results.append(
+                    VectorSearchResult(
+                        id=obj["id"],
+                        name=obj["name"],
+                        type=obj["type"],
+                        bcId=obj.get("bcId"),
+                        bcName=obj.get("bcName"),
+                        similarity=obj.get("similarity", 0.5),
+                        description=obj.get("description"),
+                    )
+                )
+
         SmartLogger.log(
             "INFO",
             "Vector search returned.",
@@ -829,7 +751,6 @@ async def vector_search(payload: VectorSearchRequest, request: Request) -> List[
 async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
     """
     Get all nodes grouped by type for frontend reference.
-    Useful for showing available connection targets.
     """
     query = """
     MATCH (bc:BoundedContext)
@@ -837,13 +758,13 @@ async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
     OPTIONAL MATCH (agg)-[:HAS_COMMAND]->(cmd:Command)
     OPTIONAL MATCH (cmd)-[:EMITS]->(evt:Event)
     OPTIONAL MATCH (bc)-[:HAS_POLICY]->(pol:Policy)
-    
-    WITH bc, 
+
+    WITH bc,
          collect(DISTINCT agg {.id, .name, .rootEntity}) as aggregates,
          collect(DISTINCT cmd {.id, .name, .actor}) as commands,
          collect(DISTINCT evt {.id, .name, .version}) as events,
          collect(DISTINCT pol {.id, .name, .triggerCondition}) as policies
-    
+
     RETURN bc {.id, .name, .description,
         aggregates: aggregates,
         commands: commands,
@@ -851,7 +772,7 @@ async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
         policies: policies
     } as boundedContext
     """
-    
+
     with get_session() as session:
         SmartLogger.log(
             "INFO",
@@ -860,10 +781,9 @@ async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
             params=http_context(request),
         )
         result = session.run(query)
-        bounded_contexts = []
+        bounded_contexts: list[dict[str, Any]] = []
         for record in result:
-            bc = dict(record["boundedContext"])
-            bounded_contexts.append(bc)
+            bounded_contexts.append(dict(record["boundedContext"]))
 
         SmartLogger.log(
             "INFO",
@@ -872,4 +792,5 @@ async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
             params={**http_context(request), "boundedContexts": len(bounded_contexts)},
         )
         return {"boundedContexts": bounded_contexts}
+
 

@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from neo4j import GraphDatabase
 from neo4j import Driver
 
-from api.smart_logger import SmartLogger
+from api.platform.observability.smart_logger import SmartLogger
 
 # Load environment variables once for the whole process.
 load_dotenv()

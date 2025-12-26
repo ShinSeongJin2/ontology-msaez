@@ -30,8 +30,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
-from api.smart_logger import SmartLogger
-from api.request_logging import summarize_for_log, sha256_text
+from api.platform.observability.smart_logger import SmartLogger
+from api.platform.observability.request_logging import summarize_for_log, sha256_text
 
 load_dotenv()
 

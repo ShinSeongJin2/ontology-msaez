@@ -1,8 +1,8 @@
 """
-Chat-based Model Modification API with ReAct Pattern
+Chat-based Model Modification API (feature router)
 
-This API provides streaming chat-based modification of domain model objects.
-Responses are streamed using Server-Sent Events (SSE) for real-time feedback.
+- Streaming chat-based modification of domain model objects (SSE)
+- ReAct style: THOUGHT/ACTION/OBSERVATION loop with inline JSON action blocks
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 
 from api.platform.neo4j import get_session
-from api.smart_logger import SmartLogger
-from api.request_logging import http_context, summarize_for_log, sha256_text
+from api.platform.observability.request_logging import http_context, summarize_for_log, sha256_text
+from api.platform.observability.smart_logger import SmartLogger
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -489,10 +489,7 @@ For "connect" actions, include:
                     "model": OPENAI_MODEL,
                     "duration_ms": total_ms,
                     "first_token_ms": first_token_ms,
-                    "stream": {
-                        "chunks": chunk_count,
-                        "chars": total_chars,
-                    },
+                    "stream": {"chunks": chunk_count, "chars": total_chars},
                     "json_blocks": {
                         "seen": json_blocks_seen,
                         "applied": json_blocks_applied,
@@ -507,10 +504,7 @@ For "connect" actions, include:
 
         yield format_sse_event(
             "complete",
-            {
-                "summary": f"완료: {len(applied_changes)}개의 변경사항이 적용되었습니다.",
-                "appliedChanges": applied_changes,
-            },
+            {"summary": f"완료: {len(applied_changes)}개의 변경사항이 적용되었습니다.", "appliedChanges": applied_changes},
         )
 
     except Exception as e:
@@ -557,9 +551,7 @@ async def modify_nodes(request: ModifyRequest, http_request: Request):
         )
 
     async def generate():
-        async for event in stream_react_response(
-            request.prompt, request.selectedNodes, request.conversationHistory
-        ):
+        async for event in stream_react_response(request.prompt, request.selectedNodes, request.conversationHistory):
             yield event
         yield "data: [DONE]\n\n"
 

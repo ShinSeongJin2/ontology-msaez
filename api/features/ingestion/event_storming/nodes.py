@@ -44,8 +44,8 @@ from .state import (
     format_user_story,
 )
 
-from api.smart_logger import SmartLogger
-from api.request_logging import summarize_for_log, sha256_text
+from api.platform.observability.smart_logger import SmartLogger
+from api.platform.observability.request_logging import summarize_for_log, sha256_text
 
 
 # Wrapper models for structured output

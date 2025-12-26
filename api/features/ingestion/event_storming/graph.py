@@ -47,7 +47,7 @@ from .nodes import (
 )
 from .state import EventStormingState, WorkflowPhase
 
-from api.smart_logger import SmartLogger
+from api.platform.observability.smart_logger import SmartLogger
 
 load_dotenv()
 

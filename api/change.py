@@ -326,6 +326,27 @@ async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> 
                 "relatedObjects": len(result.get("relatedObjects") or []),
             },
         )
+
+        # LDVC: Propagation summary for runtime verification without code review
+        try:
+            propagation = result.get("propagation") or {}
+            SmartLogger.log(
+                "INFO",
+                "Propagation summary: verify iterative impact expansion (rounds/stopReason/confirmed/review) from logs alone.",
+                category="change.plan.propagation.summary",
+                params={
+                    **http_context(request),
+                    "userStoryId": payload.userStoryId,
+                    "enabled": propagation.get("enabled"),
+                    "rounds": propagation.get("rounds"),
+                    "stopReason": propagation.get("stopReason"),
+                    "confirmed_count": len(propagation.get("confirmed") or []),
+                    "review_count": len(propagation.get("review") or []),
+                },
+            )
+        except Exception:
+            # Never break the endpoint due to logging.
+            pass
         
         return result
         

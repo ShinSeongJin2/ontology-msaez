@@ -36,6 +36,10 @@ export const useChangeStore = defineStore('change', () => {
   const changePlan = ref([])
   const planSummary = ref('')
   const planRevisions = ref([]) // History of plan revisions
+
+  // Propagation results (2nd~Nth order candidates)
+  // shape: { enabled, rounds, stopReason, confirmed, review, debug }
+  const propagation = ref(null)
   
   // Apply progress
   const applyProgress = ref(0)
@@ -44,6 +48,13 @@ export const useChangeStore = defineStore('change', () => {
   // Computed
   const hasImpact = computed(() => impactedNodes.value.length > 0)
   const hasPlan = computed(() => changePlan.value.length > 0)
+
+  const propagationEnabled = computed(() => Boolean(propagation.value?.enabled))
+  const propagationRounds = computed(() => propagation.value?.rounds ?? 0)
+  const propagationStopReason = computed(() => propagation.value?.stopReason ?? '')
+  const propagationConfirmed = computed(() => propagation.value?.confirmed ?? [])
+  const propagationReview = computed(() => propagation.value?.review ?? [])
+  const propagationDebug = computed(() => propagation.value?.debug ?? null)
   
   /**
    * Analyze the impact of a user story change
@@ -91,6 +102,7 @@ export const useChangeStore = defineStore('change', () => {
       relatedObjects.value = planData.relatedObjects || []
       changePlan.value = planData.changes || []
       planSummary.value = planData.summary || ''
+      propagation.value = planData.propagation || null
       
       // Store in revision history
       planRevisions.value = [{
@@ -147,6 +159,18 @@ export const useChangeStore = defineStore('change', () => {
       if (planData.relatedObjects) relatedObjects.value = planData.relatedObjects
       changePlan.value = planData.changes || []
       if (planData.summary) planSummary.value = planData.summary
+
+      // Keep existing propagation unless the server returns meaningful updated propagation
+      if (planData.propagation) {
+        const next = planData.propagation
+        const hasMeaningful =
+          (next.rounds && next.rounds > 0) ||
+          (Array.isArray(next.confirmed) && next.confirmed.length > 0) ||
+          (Array.isArray(next.review) && next.review.length > 0)
+        if (hasMeaningful) {
+          propagation.value = next
+        }
+      }
       
       // Add to revision history
       planRevisions.value.push({
@@ -226,6 +250,7 @@ export const useChangeStore = defineStore('change', () => {
     changePlan.value = []
     planSummary.value = ''
     planRevisions.value = []
+    propagation.value = null
     applyProgress.value = 0
     appliedChanges.value = []
   }
@@ -246,6 +271,13 @@ export const useChangeStore = defineStore('change', () => {
     changePlan,
     planSummary,
     planRevisions,
+    propagation,
+    propagationEnabled,
+    propagationRounds,
+    propagationStopReason,
+    propagationConfirmed,
+    propagationReview,
+    propagationDebug,
     applyProgress,
     appliedChanges,
     

@@ -57,8 +57,7 @@ async def extract_aggregates_phase(ctx: IngestionWorkflowContext) -> AsyncGenera
                     "prompt_sha256": sha256_text(prompt),
                     "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                     "system_sha256": sha256_text(SYSTEM_PROMPT),
-                },
-                max_inline_chars=1800,
+                }
             )
 
         t_llm0 = time.perf_counter()
@@ -85,8 +84,7 @@ async def extract_aggregates_phase(ctx: IngestionWorkflowContext) -> AsyncGenera
                         "aggregate_ids": summarize_for_log([getattr(a, "id", None) for a in aggs]),
                         "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
                     },
-                },
-                max_inline_chars=1800,
+                }
             )
 
         aggregates = agg_response.aggregates

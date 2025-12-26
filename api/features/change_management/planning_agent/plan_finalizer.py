@@ -51,8 +51,7 @@ def generate_plan_node(state: ChangePlanningState) -> Dict[str, Any]:
                 "stop_reason": state.propagation_stop_reason,
             },
             "related_objects_count": len(state.related_objects or []),
-        },
-        max_inline_chars=1200,
+        }
     )
 
     # Build context
@@ -187,8 +186,7 @@ When connecting BCs, always use the Event-Policy-Command pattern:
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(system_msg),
                 "system_sha256": sha256_text(system_msg),
-            },
-            max_inline_chars=1800,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -209,8 +207,7 @@ When connecting BCs, always use the Event-Policy-Command pattern:
                 "response_len": len(resp_text),
                 "response_sha256": sha256_text(resp_text),
                 "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
-            },
-            max_inline_chars=1800,
+            }
         )
 
     try:
@@ -258,8 +255,7 @@ When connecting BCs, always use the Event-Policy-Command pattern:
                 "action_counts": dict(action_counts),
                 "connect_types": dict(connect_types),
                 "create_types": dict(create_types),
-            },
-            max_inline_chars=1200,
+            }
         )
 
         return {
@@ -278,8 +274,7 @@ When connecting BCs, always use the Event-Policy-Command pattern:
                 "user_story_id": state.user_story_id,
                 "error": str(e),
                 "llm_raw_preview": (getattr(response, "content", "") or "")[:1500],
-            },
-            max_inline_chars=1600,
+            }
         )
         return {
             "phase": ChangePlanningPhase.AWAIT_APPROVAL,

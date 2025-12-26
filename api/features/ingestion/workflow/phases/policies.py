@@ -61,8 +61,7 @@ async def identify_policies_phase(ctx: IngestionWorkflowContext) -> AsyncGenerat
                     "prompt_sha256": sha256_text(prompt),
                     "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                     "system_sha256": sha256_text(SYSTEM_PROMPT),
-                },
-                max_inline_chars=1800,
+                }
             )
 
         t_llm0 = time.perf_counter()
@@ -88,8 +87,7 @@ async def identify_policies_phase(ctx: IngestionWorkflowContext) -> AsyncGenerat
                         "policy_ids": summarize_for_log([getattr(p, "id", None) for p in policies]),
                         "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
                     },
-                },
-                max_inline_chars=1800,
+                }
             )
     except Exception as e:
         SmartLogger.log(

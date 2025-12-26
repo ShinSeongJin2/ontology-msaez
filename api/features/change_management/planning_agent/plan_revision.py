@@ -85,8 +85,7 @@ Provide the revised plan in the same JSON format:
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(system_msg),
                 "system_sha256": sha256_text(system_msg),
-            },
-            max_inline_chars=1600,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -107,8 +106,7 @@ Provide the revised plan in the same JSON format:
                 "response_len": len(resp_text),
                 "response_sha256": sha256_text(resp_text),
                 "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
-            },
-            max_inline_chars=1600,
+            }
         )
 
     try:

@@ -41,8 +41,7 @@ def analyze_scope_node(state: ChangePlanningState) -> Dict[str, Any]:
             "connected_objects_count": len(state.connected_objects or []),
             "original_user_story": summarize_for_log(state.original_user_story),
             "edited_user_story": summarize_for_log(state.edited_user_story),
-        },
-        max_inline_chars=1200,
+        }
     )
 
     # Build context
@@ -108,8 +107,7 @@ Respond in this exact JSON format:
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(system_msg),
                 "system_sha256": sha256_text(system_msg),
-            },
-            max_inline_chars=1600,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -129,8 +127,7 @@ Respond in this exact JSON format:
                 "response_len": len(resp_text),
                 "response_sha256": sha256_text(resp_text),
                 "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
-            },
-            max_inline_chars=1600,
+            }
         )
 
     try:
@@ -167,8 +164,7 @@ Respond in this exact JSON format:
                 "keywords_to_search": (payload.get("keywords_to_search") or [])[:20],
                 "change_description": payload.get("change_description"),
                 "reasoning_preview": (payload.get("scope_reasoning") or "")[:300],
-            },
-            max_inline_chars=1000,
+            }
         )
         return payload
     except Exception as e:
@@ -180,8 +176,7 @@ Respond in this exact JSON format:
                 "user_story_id": state.user_story_id,
                 "error": str(e),
                 "llm_raw_preview": (getattr(response, "content", "") or "")[:1200],
-            },
-            max_inline_chars=1400,
+            }
         )
         return {
             "phase": ChangePlanningPhase.GENERATE_PLAN,

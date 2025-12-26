@@ -63,8 +63,7 @@ def breakdown_user_story_node(state: EventStormingState) -> Dict[str, Any]:
                     "prompt_sha256": sha256_text(prompt),
                     "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                     "system_sha256": sha256_text(SYSTEM_PROMPT),
-                },
-                max_inline_chars=1800,
+                }
             )
 
         t_llm0 = time.perf_counter()
@@ -82,8 +81,7 @@ def breakdown_user_story_node(state: EventStormingState) -> Dict[str, Any]:
                     "user_story_id": us.get("id"),
                     "llm_ms": llm_ms,
                     "response": dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(dump_model(response)),
-                },
-                max_inline_chars=1800,
+                }
             )
         # Ensure correct ID
         response.user_story_id = us["id"]

@@ -72,8 +72,7 @@ User Story는 명확하고 테스트 가능해야 합니다."""
                 "prompt_len": len(prompt),
                 "prompt_sha256": sha256_text(prompt),
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
-            },
-            max_inline_chars=1800,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -98,8 +97,7 @@ User Story는 명확하고 테스트 가능해야 합니다."""
                     "user_story_ids": summarize_for_log([getattr(s, "id", None) for s in stories]),
                     "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
                 },
-            },
-            max_inline_chars=1800,
+            }
         )
 
     return response.user_stories

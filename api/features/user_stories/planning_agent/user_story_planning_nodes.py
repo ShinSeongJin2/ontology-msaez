@@ -64,8 +64,7 @@ Respond in JSON:
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(system_msg),
                 "system_sha256": sha256_text(system_msg),
-            },
-            max_inline_chars=1600,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -99,8 +98,7 @@ Respond in JSON:
                         "domain_keywords": (result.get("domain_keywords") or [])[:30],
                         "action_verbs": (result.get("action_verbs") or [])[:30],
                     },
-                },
-                max_inline_chars=1600,
+                }
             )
         return {
             "story_intent": result.get("intent", ""),
@@ -121,8 +119,7 @@ Respond in JSON:
                     "response_len": len(resp_text),
                     "response_sha256": sha256_text(resp_text),
                     "response_preview": resp_text[:1500],
-                },
-                max_inline_chars=1600,
+                }
             )
         return {
             "story_intent": state.action,
@@ -319,8 +316,7 @@ Respond in JSON:
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(system_msg),
                 "system_sha256": sha256_text(system_msg),
-            },
-            max_inline_chars=1800,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -372,8 +368,7 @@ Respond in JSON:
                     "summary_preview": (result.get("summary") or "")[:300],
                     "objects_count": len(proposed_objects),
                     "objects": summarize_for_log([o.dict() for o in proposed_objects]),
-                },
-                max_inline_chars=1800,
+                }
             )
 
         return {"proposed_objects": proposed_objects, "plan_summary": result.get("summary", "")}
@@ -391,8 +386,7 @@ Respond in JSON:
                     "response_len": len(resp_text),
                     "response_sha256": sha256_text(resp_text),
                     "response_preview": resp_text[:1500],
-                },
-                max_inline_chars=1800,
+                }
             )
         return {"proposed_objects": [], "plan_summary": f"Error generating objects: {str(e)}", "error": str(e)}
 

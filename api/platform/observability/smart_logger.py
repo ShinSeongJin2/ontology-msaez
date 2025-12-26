@@ -106,7 +106,7 @@ class SmartLogger:
         message: str,
         category: str | None = None,
         params: dict | None = None,
-        max_inline_chars: int = 200,
+        max_inline_chars: int = 100,
     ) -> None:
         try:
             _IMPL.log(level, message, category=category, params=params, max_inline_chars=max_inline_chars)

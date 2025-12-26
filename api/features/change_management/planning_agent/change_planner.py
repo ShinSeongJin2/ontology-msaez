@@ -307,8 +307,7 @@ def generate_change_plan(
                 "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                 "system_len": len(CHANGE_PLANNER_SYSTEM_PROMPT),
                 "system_sha256": sha256_text(CHANGE_PLANNER_SYSTEM_PROMPT),
-            },
-            max_inline_chars=1800,
+            }
         )
 
     t_llm0 = time.perf_counter()
@@ -332,8 +331,7 @@ def generate_change_plan(
                 "llm_ms": llm_ms,
                 "changes_count": len(getattr(response, "changes", []) or []),
                 "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
-            },
-            max_inline_chars=1800,
+            }
         )
     
     # Convert to dict format for API response
@@ -388,7 +386,6 @@ if __name__ == "__main__":
         "INFO",
         "Generated Change Plan (test)",
         category="agent.change_planner",
-        params={"changes": test_changes},
-        max_inline_chars=500,
+        params={"changes": test_changes}
     )
 

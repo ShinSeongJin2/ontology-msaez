@@ -85,8 +85,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
             "seed_ids": summarize_for_log(seed_ids),
             "limits": limits,
             "relationship_whitelist": rel_types,
-        },
-        max_inline_chars=1400,
+        }
     )
 
     if not seed_ids:
@@ -154,8 +153,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                         "confirmed_so_far": len(confirmed),
                         "review_so_far": len(review),
                         "seen_so_far": len(seen_ids),
-                    },
-                    max_inline_chars=1200,
+                    }
                 )
 
                 contexts: list[str] = []
@@ -204,8 +202,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                         "per_center_subgraph_sizes": per_center_subgraph_sizes,
                         "remaining_confirmed_budget": remaining_confirmed_budget,
                         "round_budget": round_budget,
-                    },
-                    max_inline_chars=1800,
+                    }
                 )
 
                 prompt = propagation_prompt(
@@ -226,8 +223,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                         "confirmed": len(confirmed),
                         "review": len(review),
                         "round_budget": round_budget,
-                    },
-                    max_inline_chars=1200,
+                    }
                 )
 
                 provider, model = get_llm_provider_model()
@@ -249,8 +245,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                             "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                             "system_len": len(system_msg),
                             "system_sha256": sha256_text(system_msg),
-                        },
-                        max_inline_chars=1800,
+                        }
                     )
 
                 t_llm0 = time.perf_counter()
@@ -271,8 +266,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                             "response_len": len(resp_text),
                             "response_sha256": sha256_text(resp_text),
                             "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
-                        },
-                        max_inline_chars=1800,
+                        }
                     )
 
                 parsed: Dict[str, Any] = {}
@@ -283,8 +277,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                         "WARNING",
                         "Propagation round: failed to parse LLM JSON, stopping propagation early.",
                         category="agent.change_graph.propagation.parse_error",
-                        params={"round": round_idx, "error": str(e), "raw": resp_text[:1500]},
-                        max_inline_chars=1600,
+                        params={"round": round_idx, "error": str(e), "raw": resp_text[:1500]}
                     )
                     stop_reason = "llm_parse_error"
                     break
@@ -393,8 +386,7 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                         "confirmed_total": len(confirmed),
                         "review_total": len(review),
                         "seen_total": len(seen_ids),
-                    },
-                    max_inline_chars=1800,
+                    }
                 )
 
                 if not new_confirmed_ids:

@@ -63,8 +63,7 @@ async def extract_commands_phase(ctx: IngestionWorkflowContext) -> AsyncGenerato
                             "prompt_sha256": sha256_text(prompt),
                             "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
                             "system_sha256": sha256_text(SYSTEM_PROMPT),
-                        },
-                        max_inline_chars=1800,
+                        }
                     )
 
                 t_llm0 = time.perf_counter()
@@ -92,8 +91,7 @@ async def extract_commands_phase(ctx: IngestionWorkflowContext) -> AsyncGenerato
                                 "command_ids": summarize_for_log([getattr(c, "id", None) for c in commands]),
                                 "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
                             },
-                        },
-                        max_inline_chars=1800,
+                        }
                     )
             except Exception as e:
                 SmartLogger.log(

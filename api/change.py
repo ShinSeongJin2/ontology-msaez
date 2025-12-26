@@ -32,6 +32,7 @@ router = APIRouter(prefix="/api/change", tags=["change"])
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
+NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
 
 driver = None
 
@@ -44,6 +45,8 @@ def get_driver():
 
 
 def get_session():
+    if NEO4J_DATABASE:
+        return get_driver().session(database=NEO4J_DATABASE)
     return get_driver().session()
 
 

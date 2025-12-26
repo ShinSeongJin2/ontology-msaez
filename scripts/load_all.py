@@ -6,12 +6,17 @@ Usage: python3 load_all.py
 
 from neo4j import GraphDatabase
 from pathlib import Path
+import os
 import sys
 
-# Neo4j 연결 설정
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "12345msaez"
+from dotenv import load_dotenv
+
+# Neo4j 연결 설정 (.env 우선)
+load_dotenv()
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "12345msaez")
+NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
 
 # 프로젝트 루트 경로
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -41,7 +46,7 @@ def execute_cypher_statements(driver, content: str, description: str):
     success_count = 0
     error_count = 0
     
-    with driver.session() as session:
+    with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
         for i, stmt in enumerate(statements, 1):
             stmt = stmt.strip()
             if not stmt:
@@ -71,6 +76,8 @@ def main():
     print("="*60)
     print(f"   URI: {NEO4J_URI}")
     print(f"   User: {NEO4J_USER}")
+    if NEO4J_DATABASE:
+        print(f"   Database: {NEO4J_DATABASE}")
     
     # Neo4j 연결
     try:
@@ -85,7 +92,7 @@ def main():
     try:
         # 기존 데이터 삭제
         print("🗑️  Clearing existing data...")
-        with driver.session() as session:
+        with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             session.run("MATCH (n) DETACH DELETE n")
         print("   ✓ Database cleared")
         
@@ -114,7 +121,7 @@ def main():
         print("📊 Database Statistics")
         print("="*60)
         
-        with driver.session() as session:
+        with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             result = session.run("""
                 MATCH (n)
                 RETURN labels(n)[0] as label, count(n) as count
@@ -144,7 +151,7 @@ def main():
         print("🔍 Impact Analysis Demo: UserStory US-001 (주문 취소)")
         print("="*60)
         
-        with driver.session() as session:
+        with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             result = session.run("""
                 MATCH (us:UserStory {id: "US-001"})
                 RETURN us.role + " wants to " + us.action as story

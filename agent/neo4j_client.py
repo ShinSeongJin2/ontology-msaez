@@ -26,6 +26,13 @@ class Neo4jConfig:
     uri: str = field(default_factory=lambda: os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     user: str = field(default_factory=lambda: os.getenv("NEO4J_USER", "neo4j"))
     password: str = field(default_factory=lambda: os.getenv("NEO4J_PASSWORD", "12345msaez"))
+    # Multi-database support (Neo4j Enterprise / 4.0+). If unset, uses server default DB.
+    # Supports both `NEO4J_DATABASE` and legacy/lowercase `neo4j_database`.
+    database: str | None = field(
+        default_factory=lambda: (
+            (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip() or None
+        )
+    )
 
 
 class Neo4jClient:
@@ -51,7 +58,10 @@ class Neo4jClient:
     @contextmanager
     def session(self):
         """Context manager for Neo4j sessions."""
-        session = self.driver.session()
+        if self.config.database:
+            session = self.driver.session(database=self.config.database)
+        else:
+            session = self.driver.session()
         try:
             yield session
         finally:
@@ -61,6 +71,9 @@ class Neo4jClient:
         """Verify Neo4j connection."""
         try:
             self.driver.verify_connectivity()
+            # Also verify the configured database is usable (not just server reachability).
+            with self.session() as session:
+                session.run("RETURN 1").consume()
             return True
         except Exception:
             return False

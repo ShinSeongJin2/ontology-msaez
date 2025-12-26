@@ -152,6 +152,18 @@ def get_neo4j_driver():
     return GraphDatabase.driver(uri, auth=(user, password))
 
 
+def get_neo4j_database() -> str | None:
+    """Get target Neo4j database name (multi-database support)."""
+    db = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or "").strip()
+    return db or None
+
+
+def neo4j_session(driver):
+    """Create a session for the configured database (or default)."""
+    db = get_neo4j_database()
+    return driver.session(database=db) if db else driver.session()
+
+
 # =============================================================================
 # Node Functions
 # =============================================================================
@@ -272,7 +284,7 @@ def search_related_objects_node(state: ChangePlanningState) -> Dict[str, Any]:
         query_embedding = embeddings.embed_query(search_query)
         
         # First, check if vector index exists and nodes have embeddings
-        with driver.session() as session:
+        with neo4j_session(driver) as session:
             # Try vector search if embeddings exist
             vector_search_query = """
             // First try to find objects by name similarity
@@ -569,7 +581,7 @@ def apply_changes_node(state: ChangePlanningState) -> Dict[str, Any]:
     applied_changes = []
     
     try:
-        with driver.session() as session:
+        with neo4j_session(driver) as session:
             # Update user story
             session.run("""
                 MATCH (us:UserStory {id: $us_id})

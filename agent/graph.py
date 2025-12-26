@@ -47,6 +47,8 @@ from agent.nodes import (
 )
 from agent.state import EventStormingState, WorkflowPhase
 
+from api.smart_logger import SmartLogger
+
 load_dotenv()
 
 
@@ -252,7 +254,7 @@ class EventStormingRunner:
 
         # Check completion:
         if runner.is_complete():
-            print(runner.get_result())
+            SmartLogger.log("INFO", "Workflow complete", category="agent.runner", params={"result": runner.get_result()})
     """
 
     def __init__(self, thread_id: str = "default"):
@@ -321,6 +323,5 @@ class EventStormingRunner:
 
 if __name__ == "__main__":
     # Print the graph visualization
-    print("Event Storming Workflow Graph:")
-    print(get_graph_visualization())
+    SmartLogger.log("INFO", "Event Storming Workflow Graph", category="agent.graph", params={"mermaid": get_graph_visualization()})
 

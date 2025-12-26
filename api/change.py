@@ -24,6 +24,8 @@ from fastapi import APIRouter, HTTPException
 from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 
+from api.smart_logger import SmartLogger
+
 load_dotenv()
 
 router = APIRouter(prefix="/api/change", tags=["change"])
@@ -193,10 +195,12 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
+        SmartLogger.log("INFO", "Impact analysis requested", category="change.impact", params={"user_story_id": user_story_id})
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
         
         if not record:
+            SmartLogger.log("WARNING", "User story not found for impact analysis", category="change.impact", params={"user_story_id": user_story_id})
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
         
         user_story = dict(record["userStory"])
@@ -224,6 +228,16 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
                 impacted_nodes.append(dict(evt))
                 seen_ids.add(evt["id"])
         
+        SmartLogger.log(
+            "INFO",
+            "Impact analysis computed",
+            category="change.impact",
+            params={
+                "user_story_id": user_story_id,
+                "boundedContext": bounded_context.get("id") if bounded_context else None,
+                "impactedNodes": len(impacted_nodes),
+            },
+        )
         return {
             "userStory": user_story,
             "boundedContext": bounded_context,
@@ -254,6 +268,17 @@ async def generate_change_plan(request: ChangePlanRequest) -> dict[str, Any]:
     from agent.change_graph import run_change_planning
     
     try:
+        SmartLogger.log(
+            "INFO",
+            "Generate change plan requested",
+            category="change.plan",
+            params={
+                "userStoryId": request.userStoryId,
+                "impactedNodes": len(request.impactedNodes),
+                "hasFeedback": bool(request.feedback),
+                "hasPreviousPlan": bool(request.previousPlan),
+            },
+        )
         result = run_change_planning(
             user_story_id=request.userStoryId,
             original_user_story=request.originalUserStory or {},
@@ -262,12 +287,28 @@ async def generate_change_plan(request: ChangePlanRequest) -> dict[str, Any]:
             feedback=request.feedback,
             previous_plan=request.previousPlan
         )
+        SmartLogger.log(
+            "INFO",
+            "Generate change plan completed",
+            category="change.plan",
+            params={
+                "userStoryId": request.userStoryId,
+                "scope": result.get("scope"),
+                "changes": len(result.get("changes") or []),
+                "relatedObjects": len(result.get("relatedObjects") or []),
+            },
+        )
         
         return result
         
     except Exception as e:
         import traceback
-        traceback.print_exc()
+        SmartLogger.log(
+            "ERROR",
+            "Failed to generate change plan",
+            category="change.plan",
+            params={"userStoryId": request.userStoryId, "error": str(e), "traceback": traceback.format_exc()},
+        )
         raise HTTPException(status_code=500, detail=f"Failed to generate change plan: {str(e)}")
 
 
@@ -283,6 +324,12 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
     """
     applied_changes = []
     errors = []
+    SmartLogger.log(
+        "INFO",
+        "Apply changes requested",
+        category="change.apply",
+        params={"userStoryId": request.userStoryId, "changePlan": len(request.changePlan)},
+    )
     
     with get_session() as session:
         # Step 1: Update the user story
@@ -310,6 +357,7 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
             })
         except Exception as e:
             errors.append(f"Failed to update user story: {str(e)}")
+            SmartLogger.log("ERROR", "Failed to update user story", category="change.apply", params={"userStoryId": request.userStoryId, "error": str(e)})
         
         # Step 2: Apply each change in the plan
         for change in request.changePlan:
@@ -472,7 +520,28 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                     "success": False,
                     "error": str(e)
                 })
+                SmartLogger.log(
+                    "ERROR",
+                    "Failed to apply change item",
+                    category="change.apply",
+                    params={
+                        "userStoryId": request.userStoryId,
+                        "action": change.get("action"),
+                        "targetId": change.get("targetId"),
+                        "error": str(e),
+                    },
+                )
     
+    SmartLogger.log(
+        "INFO",
+        "Apply changes completed",
+        category="change.apply",
+        params={
+            "userStoryId": request.userStoryId,
+            "appliedChanges": len(applied_changes),
+            "errors": len(errors),
+        },
+    )
     return ApplyChangesResponse(
         success=len(errors) == 0,
         appliedChanges=applied_changes,
@@ -494,16 +563,20 @@ async def get_change_history(user_story_id: str) -> list[dict[str, Any]]:
     """
     
     with get_session() as session:
+        SmartLogger.log("INFO", "Change history requested", category="change.history", params={"user_story_id": user_story_id})
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
         
         if not record:
+            SmartLogger.log("WARNING", "Change history user story not found", category="change.history", params={"user_story_id": user_story_id})
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
         
-        return {
+        payload = {
             "current": dict(record["current"]) if record["current"] else None,
             "history": [dict(h) for h in record["history"]]
         }
+        SmartLogger.log("INFO", "Change history returned", category="change.history", params={"user_story_id": user_story_id, "versions": len(payload.get("history") or [])})
+        return payload
 
 
 @router.post("/search")
@@ -557,6 +630,12 @@ async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult
     keywords = [w.strip() for w in request.query.split() if len(w.strip()) > 2]
     if not keywords:
         keywords = [request.query]
+    SmartLogger.log(
+        "INFO",
+        "Vector search requested",
+        category="change.search",
+        params={"query": request.query, "keywords": keywords[:10], "limit": request.limit, "nodeTypes": request.nodeTypes},
+    )
     
     with get_session() as session:
         result = session.run(
@@ -585,6 +664,7 @@ async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult
                     description=obj.get("description")
                 ))
         
+        SmartLogger.log("INFO", "Vector search returned", category="change.search", params={"query": request.query, "results": len(results)})
         return results
 
 
@@ -616,11 +696,13 @@ async def get_all_nodes() -> dict[str, List[dict[str, Any]]]:
     """
     
     with get_session() as session:
+        SmartLogger.log("INFO", "All-nodes requested", category="change.all_nodes")
         result = session.run(query)
         bounded_contexts = []
         for record in result:
             bc = dict(record["boundedContext"])
             bounded_contexts.append(bc)
-        
+
+        SmartLogger.log("INFO", "All-nodes returned", category="change.all_nodes", params={"boundedContexts": len(bounded_contexts)})
         return {"boundedContexts": bounded_contexts}
 

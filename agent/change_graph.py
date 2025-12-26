@@ -27,6 +27,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
+from api.smart_logger import SmartLogger
+
 load_dotenv()
 
 
@@ -341,7 +343,7 @@ def search_related_objects_node(state: ChangePlanningState) -> Dict[str, Any]:
                     ))
     
     except Exception as e:
-        print(f"Vector search error: {e}")
+        SmartLogger.log("ERROR", "Vector search error", category="agent.change_graph.search_related", params={"error": str(e)})
     finally:
         driver.close()
     

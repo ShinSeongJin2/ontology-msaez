@@ -10,6 +10,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from api.smart_logger import SmartLogger
 
 # Neo4j 연결 설정 (.env 우선)
 load_dotenv()
@@ -21,12 +22,18 @@ NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or 
 # 프로젝트 루트 경로
 PROJECT_ROOT = Path(__file__).parent.parent
 
+LOG_CATEGORY = "scripts.load_all"
+
+
+def log(level: str, message: str, params: dict | None = None) -> None:
+    SmartLogger.log(level, message, category=LOG_CATEGORY, params=params)
+
 
 def execute_cypher_statements(driver, content: str, description: str):
     """Cypher 문장들을 파싱하고 실행"""
-    print(f"\n{'='*60}")
-    print(f"📂 {description}")
-    print('='*60)
+    log("INFO", f"{'='*60}")
+    log("INFO", f"📂 {description}")
+    log("INFO", f"{'='*60}")
     
     statements = []
     current_statement = []
@@ -55,7 +62,7 @@ def execute_cypher_statements(driver, content: str, description: str):
                 session.run(stmt)
                 success_count += 1
                 if success_count % 10 == 0:
-                    print(f"   ✓ {success_count} statements executed...")
+                    log("INFO", f"   ✓ {success_count} statements executed...")
             except Exception as e:
                 error_count += 1
                 error_msg = str(e)
@@ -64,37 +71,37 @@ def execute_cypher_statements(driver, content: str, description: str):
                     success_count += 1
                     error_count -= 1
                 else:
-                    print(f"   ✗ Error: {error_msg[:80]}")
+                    log("ERROR", f"   ✗ Error: {error_msg[:80]}", params={"statement_index": i})
     
-    print(f"   ✅ Completed: {success_count} statements")
+    log("INFO", f"   ✅ Completed: {success_count} statements")
     return success_count, error_count
 
 
 def main():
-    print("\n" + "="*60)
-    print("🚀 Event Storming Impact Analysis - Auto Loader")
-    print("="*60)
-    print(f"   URI: {NEO4J_URI}")
-    print(f"   User: {NEO4J_USER}")
+    log("INFO", "\n" + "="*60)
+    log("INFO", "🚀 Event Storming Impact Analysis - Auto Loader")
+    log("INFO", "="*60)
+    log("INFO", f"   URI: {NEO4J_URI}")
+    log("INFO", f"   User: {NEO4J_USER}")
     if NEO4J_DATABASE:
-        print(f"   Database: {NEO4J_DATABASE}")
+        log("INFO", f"   Database: {NEO4J_DATABASE}")
     
     # Neo4j 연결
     try:
         driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         driver.verify_connectivity()
-        print("   ✅ Connected to Neo4j\n")
+        log("INFO", "   ✅ Connected to Neo4j")
     except Exception as e:
-        print(f"\n❌ Connection failed: {e}")
-        print("\n💡 Neo4j Desktop에서 데이터베이스가 실행 중인지 확인하세요.")
+        log("ERROR", f"❌ Connection failed: {e}")
+        log("INFO", "💡 Neo4j Desktop에서 데이터베이스가 실행 중인지 확인하세요.")
         sys.exit(1)
     
     try:
         # 기존 데이터 삭제
-        print("🗑️  Clearing existing data...")
+        log("WARNING", "🗑️  Clearing existing data...")
         with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             session.run("MATCH (n) DETACH DELETE n")
-        print("   ✓ Database cleared")
+        log("INFO", "   ✓ Database cleared")
         
         # 로드할 파일들
         files_to_load = [
@@ -114,12 +121,12 @@ def main():
                 total_success += success
                 total_errors += errors
             else:
-                print(f"\n⚠️  File not found: {filepath}")
+                log("WARNING", f"⚠️  File not found: {filepath}")
         
         # 통계 출력
-        print("\n" + "="*60)
-        print("📊 Database Statistics")
-        print("="*60)
+        log("INFO", "\n" + "="*60)
+        log("INFO", "📊 Database Statistics")
+        log("INFO", "="*60)
         
         with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             result = session.run("""
@@ -127,29 +134,29 @@ def main():
                 RETURN labels(n)[0] as label, count(n) as count
                 ORDER BY label
             """)
-            print("\n📦 Nodes:")
+            log("INFO", "📦 Nodes:")
             for record in result:
-                print(f"   • {record['label']}: {record['count']}")
+                log("INFO", f"   • {record['label']}: {record['count']}")
             
             result = session.run("""
                 MATCH ()-[r]->()
                 RETURN type(r) as type, count(r) as count
                 ORDER BY type
             """)
-            print("\n🔗 Relationships:")
+            log("INFO", "🔗 Relationships:")
             for record in result:
-                print(f"   • {record['type']}: {record['count']}")
+                log("INFO", f"   • {record['type']}: {record['count']}")
         
         # 최종 결과
-        print("\n" + "="*60)
-        print("🎉 Loading Complete!")
-        print("="*60)
-        print(f"   Total: {total_success} statements executed")
+        log("INFO", "\n" + "="*60)
+        log("INFO", "🎉 Loading Complete!")
+        log("INFO", "="*60)
+        log("INFO", f"   Total: {total_success} statements executed")
         
         # 영향도 분석 예제 쿼리 실행
-        print("\n" + "="*60)
-        print("🔍 Impact Analysis Demo: UserStory US-001 (주문 취소)")
-        print("="*60)
+        log("INFO", "\n" + "="*60)
+        log("INFO", "🔍 Impact Analysis Demo: UserStory US-001 (주문 취소)")
+        log("INFO", "="*60)
         
         with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
             result = session.run("""
@@ -157,26 +164,26 @@ def main():
                 RETURN us.role + " wants to " + us.action as story
             """)
             for record in result:
-                print(f"\n📝 Story: {record['story']}")
+                log("INFO", f"📝 Story: {record['story']}")
             
             result = session.run("""
                 MATCH (us:UserStory {id: "US-001"})-[:IMPLEMENTS]->(target)
                 RETURN labels(target)[0] as type, target.name as name
             """)
-            print("\n🎯 Implements:")
+            log("INFO", "🎯 Implements:")
             for record in result:
-                print(f"   • {record['type']}: {record['name']}")
+                log("INFO", f"   • {record['type']}: {record['name']}")
             
             result = session.run("""
                 MATCH (evt:Event {name: "OrderCancelled"})<-[:SUBSCRIBES]-(ms:Microservice)
                 RETURN ms.name as service
             """)
-            print("\n⚠️  OrderCancelled 이벤트 변경 시 영향받는 서비스:")
+            log("INFO", "⚠️  OrderCancelled 이벤트 변경 시 영향받는 서비스:")
             for record in result:
-                print(f"   • {record['service']}")
+                log("INFO", f"   • {record['service']}")
         
-        print("\n💡 Neo4j Browser에서 확인: http://localhost:7474")
-        print('   쿼리 예: MATCH (n) RETURN n LIMIT 100')
+        log("INFO", "💡 Neo4j Browser에서 확인: http://localhost:7474")
+        log("INFO", "   쿼리 예: MATCH (n) RETURN n LIMIT 100")
         
     finally:
         driver.close()

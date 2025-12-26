@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from api.smart_logger import SmartLogger
+
 load_dotenv()
 
 
@@ -333,7 +335,12 @@ if __name__ == "__main__":
             {"id": "EVT-ITEM-ADDED", "name": "ItemAddedToCart", "type": "Event"}
         ]
     )
-    
-    print("Generated Change Plan:")
-    print(json.dumps(test_changes, indent=2))
+
+    SmartLogger.log(
+        "INFO",
+        "Generated Change Plan (test)",
+        category="agent.change_planner",
+        params={"changes": test_changes},
+        max_inline_chars=500,
+    )
 

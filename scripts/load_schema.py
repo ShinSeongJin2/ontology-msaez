@@ -10,6 +10,7 @@ import os
 import sys
 
 from dotenv import load_dotenv
+from api.smart_logger import SmartLogger
 
 # Neo4j 연결 설정 (.env 우선)
 load_dotenv()
@@ -21,13 +22,19 @@ NEO4J_DATABASE = (os.getenv("NEO4J_DATABASE") or os.getenv("neo4j_database") or 
 # 프로젝트 루트 경로
 PROJECT_ROOT = Path(__file__).parent.parent
 
+LOG_CATEGORY = "scripts.load_schema"
+
+
+def log(level: str, message: str, params: dict | None = None) -> None:
+    SmartLogger.log(level, message, category=LOG_CATEGORY, params=params)
+
 
 def load_cypher_file(driver, filepath: Path, description: str):
     """Cypher 파일을 읽어서 실행"""
-    print(f"\n{'='*60}")
-    print(f"📂 Loading: {description}")
-    print(f"   File: {filepath.name}")
-    print('='*60)
+    log("INFO", f"{'='*60}")
+    log("INFO", f"📂 Loading: {description}")
+    log("INFO", f"   File: {filepath.name}")
+    log("INFO", f"{'='*60}")
     
     content = filepath.read_text(encoding='utf-8')
     
@@ -63,32 +70,32 @@ def load_cypher_file(driver, filepath: Path, description: str):
                 success_count += 1
                 # 진행 상황 표시 (10개마다)
                 if success_count % 10 == 0:
-                    print(f"   ✓ {success_count} statements executed...")
+                    log("INFO", f"   ✓ {success_count} statements executed...")
             except Exception as e:
                 error_count += 1
-                print(f"   ✗ Error in statement {i}: {str(e)[:80]}")
+                log("ERROR", f"   ✗ Error in statement {i}: {str(e)[:80]}")
     
-    print(f"\n   ✅ Success: {success_count} statements")
+    log("INFO", f"\n   ✅ Success: {success_count} statements")
     if error_count > 0:
-        print(f"   ❌ Errors: {error_count} statements")
+        log("WARNING", f"   ❌ Errors: {error_count} statements")
     
     return success_count, error_count
 
 
 def clear_database(driver):
     """기존 데이터 삭제 (선택적)"""
-    print("\n⚠️  Clearing existing data...")
+    log("WARNING", "⚠️  Clearing existing data...")
     with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
         # 모든 관계와 노드 삭제
         session.run("MATCH (n) DETACH DELETE n")
-    print("   ✓ Database cleared")
+    log("INFO", "   ✓ Database cleared")
 
 
 def show_statistics(driver):
     """데이터베이스 통계 출력"""
-    print("\n" + "="*60)
-    print("📊 Database Statistics")
-    print("="*60)
+    log("INFO", "\n" + "="*60)
+    log("INFO", "📊 Database Statistics")
+    log("INFO", "="*60)
     
     with (driver.session(database=NEO4J_DATABASE) if NEO4J_DATABASE else driver.session()) as session:
         # 노드 수 집계
@@ -97,9 +104,9 @@ def show_statistics(driver):
             RETURN labels(n)[0] as label, count(n) as count
             ORDER BY label
         """)
-        print("\n📦 Nodes:")
+        log("INFO", "📦 Nodes:")
         for record in result:
-            print(f"   • {record['label']}: {record['count']}")
+            log("INFO", f"   • {record['label']}: {record['count']}")
         
         # 관계 수 집계
         result = session.run("""
@@ -107,28 +114,28 @@ def show_statistics(driver):
             RETURN type(r) as type, count(r) as count
             ORDER BY type
         """)
-        print("\n🔗 Relationships:")
+        log("INFO", "🔗 Relationships:")
         for record in result:
-            print(f"   • {record['type']}: {record['count']}")
+            log("INFO", f"   • {record['type']}: {record['count']}")
 
 
 def main():
-    print("\n" + "="*60)
-    print("🚀 Event Storming Impact Analysis - Schema Loader")
-    print("="*60)
-    print(f"   URI: {NEO4J_URI}")
-    print(f"   User: {NEO4J_USER}")
+    log("INFO", "\n" + "="*60)
+    log("INFO", "🚀 Event Storming Impact Analysis - Schema Loader")
+    log("INFO", "="*60)
+    log("INFO", f"   URI: {NEO4J_URI}")
+    log("INFO", f"   User: {NEO4J_USER}")
     if NEO4J_DATABASE:
-        print(f"   Database: {NEO4J_DATABASE}")
+        log("INFO", f"   Database: {NEO4J_DATABASE}")
     
     # Neo4j 연결
     try:
         driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
         driver.verify_connectivity()
-        print("   ✅ Connected to Neo4j")
+        log("INFO", "   ✅ Connected to Neo4j")
     except Exception as e:
-        print(f"\n❌ Connection failed: {e}")
-        print("\n💡 Neo4j Desktop에서 데이터베이스가 실행 중인지 확인하세요.")
+        log("ERROR", f"❌ Connection failed: {e}")
+        log("INFO", "💡 Neo4j Desktop에서 데이터베이스가 실행 중인지 확인하세요.")
         sys.exit(1)
     
     try:
@@ -160,19 +167,19 @@ def main():
                 total_success += success
                 total_errors += errors
             else:
-                print(f"\n⚠️  File not found: {filepath}")
+                log("WARNING", f"⚠️  File not found: {filepath}")
         
         # 통계 출력
         show_statistics(driver)
         
         # 최종 결과
-        print("\n" + "="*60)
-        print("🎉 Loading Complete!")
-        print("="*60)
-        print(f"   Total Success: {total_success} statements")
-        print(f"   Total Errors: {total_errors} statements")
-        print("\n💡 Neo4j Browser에서 다음 쿼리로 확인하세요:")
-        print('   MATCH (n) RETURN n LIMIT 50')
+        log("INFO", "\n" + "="*60)
+        log("INFO", "🎉 Loading Complete!")
+        log("INFO", "="*60)
+        log("INFO", f"   Total Success: {total_success} statements")
+        log("INFO", f"   Total Errors: {total_errors} statements")
+        log("INFO", "💡 Neo4j Browser에서 다음 쿼리로 확인하세요:")
+        log("INFO", "   MATCH (n) RETURN n LIMIT 50")
         
     finally:
         driver.close()

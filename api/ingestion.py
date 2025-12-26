@@ -22,6 +22,8 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from api.smart_logger import SmartLogger
+
 # Add parent directory to path for agent imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -125,11 +127,17 @@ def extract_text_from_pdf(file_content: bytes) -> str:
         doc.close()
         return "\n".join(text_parts)
     except ImportError:
+        SmartLogger.log(
+            "ERROR",
+            "PDF processing requires PyMuPDF (fitz import failed)",
+            category="ingestion.pdf",
+        )
         raise HTTPException(
             status_code=500,
             detail="PDF processing requires PyMuPDF. Install with: pip install PyMuPDF"
         )
     except Exception as e:
+        SmartLogger.log("ERROR", "Failed to parse PDF", category="ingestion.pdf", params={"error": str(e)})
         raise HTTPException(status_code=400, detail=f"Failed to parse PDF: {str(e)}")
 
 
@@ -142,6 +150,7 @@ def get_llm():
     """Get configured LLM instance."""
     provider = os.getenv("LLM_PROVIDER", "openai")
     model = os.getenv("LLM_MODEL", "gpt-4o")
+    SmartLogger.log("INFO", "LLM configured", category="ingestion.llm", params={"provider": provider, "model": model})
     
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -226,6 +235,12 @@ async def run_ingestion_workflow(
     client = get_neo4j_client()
     
     try:
+        SmartLogger.log(
+            "INFO",
+            "Ingestion workflow started",
+            category="ingestion.workflow",
+            params={"session_id": session.id, "content_length": len(content)},
+        )
         # Phase 1: Parsing
         yield ProgressEvent(
             phase=IngestionPhase.PARSING,
@@ -242,6 +257,12 @@ async def run_ingestion_workflow(
         )
         
         user_stories = extract_user_stories_from_text(content)
+        SmartLogger.log(
+            "INFO",
+            "User stories extracted",
+            category="ingestion.workflow.user_stories",
+            params={"session_id": session.id, "count": len(user_stories)},
+        )
         
         # Save user stories to Neo4j and emit events for each
         for i, us in enumerate(user_stories):
@@ -275,8 +296,14 @@ async def run_ingestion_workflow(
                 )
                 await asyncio.sleep(0.15)  # Small delay for visual effect
                 
-            except Exception:
-                pass  # Skip if already exists
+            except Exception as e:
+                # Skip if already exists (or any create error) but keep traceability.
+                SmartLogger.log(
+                    "WARNING",
+                    "User story create skipped",
+                    category="ingestion.neo4j.user_story",
+                    params={"session_id": session.id, "id": us.id, "error": str(e)},
+                )
         
         yield ProgressEvent(
             phase=IngestionPhase.EXTRACTING_USER_STORIES,
@@ -315,6 +342,12 @@ async def run_ingestion_workflow(
         ])
         
         bc_candidates = bc_response.bounded_contexts
+        SmartLogger.log(
+            "INFO",
+            "Bounded contexts identified",
+            category="ingestion.workflow.bc",
+            params={"session_id": session.id, "count": len(bc_candidates), "ids": [bc.id for bc in bc_candidates][:10]},
+        )
         
         # Create BCs in Neo4j
         for bc_idx, bc in enumerate(bc_candidates):
@@ -363,8 +396,13 @@ async def run_ingestion_workflow(
                         }
                     )
                     await asyncio.sleep(0.1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    SmartLogger.log(
+                        "WARNING",
+                        "User story to BC link skipped",
+                        category="ingestion.neo4j.us_to_bc",
+                        params={"session_id": session.id, "user_story_id": us_id, "bc_id": bc.id, "error": str(e)},
+                    )
         
         # Phase 4: Extract Aggregates
         yield ProgressEvent(
@@ -402,6 +440,12 @@ async def run_ingestion_workflow(
             
             aggregates = agg_response.aggregates
             all_aggregates[bc.id] = aggregates
+            SmartLogger.log(
+                "INFO",
+                "Aggregates extracted",
+                category="ingestion.workflow.aggregates",
+                params={"session_id": session.id, "bc_id": bc.id, "bc_name": bc.name, "count": len(aggregates)},
+            )
             
             for agg in aggregates:
                 client.create_aggregate(
@@ -466,10 +510,23 @@ async def run_ingestion_workflow(
                         HumanMessage(content=prompt)
                     ])
                     commands = cmd_response.commands
-                except Exception:
+                except Exception as e:
+                    SmartLogger.log(
+                        "WARNING",
+                        "Command extraction failed (LLM)",
+                        category="ingestion.workflow.commands",
+                        params={"session_id": session.id, "bc_id": bc.id, "agg_id": agg.id, "error": str(e)},
+                    )
                     commands = []
                 
                 all_commands[agg.id] = commands
+                if commands:
+                    SmartLogger.log(
+                        "INFO",
+                        "Commands extracted",
+                        category="ingestion.workflow.commands",
+                        params={"session_id": session.id, "agg_id": agg.id, "count": len(commands)},
+                    )
                 
                 for cmd in commands:
                     client.create_command(
@@ -536,10 +593,23 @@ async def run_ingestion_workflow(
                         HumanMessage(content=prompt)
                     ])
                     events = evt_response.events
-                except Exception:
+                except Exception as e:
+                    SmartLogger.log(
+                        "WARNING",
+                        "Event extraction failed (LLM)",
+                        category="ingestion.workflow.events",
+                        params={"session_id": session.id, "bc_id": bc.id, "agg_id": agg.id, "error": str(e)},
+                    )
                     events = []
                 
                 all_events[agg.id] = events
+                if events:
+                    SmartLogger.log(
+                        "INFO",
+                        "Events extracted",
+                        category="ingestion.workflow.events",
+                        params={"session_id": session.id, "agg_id": agg.id, "count": len(events)},
+                    )
                 
                 for i, evt in enumerate(events):
                     cmd_id = commands[i].id if i < len(commands) else commands[0].id if commands else None
@@ -616,7 +686,13 @@ async def run_ingestion_workflow(
                 HumanMessage(content=prompt)
             ])
             policies = pol_response.policies
-        except Exception:
+        except Exception as e:
+            SmartLogger.log(
+                "WARNING",
+                "Policy identification failed (LLM)",
+                category="ingestion.workflow.policies",
+                params={"session_id": session.id, "error": str(e)},
+            )
             policies = []
         
         for pol in policies:
@@ -665,8 +741,13 @@ async def run_ingestion_workflow(
                             }
                         }
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    SmartLogger.log(
+                        "WARNING",
+                        "Policy create skipped",
+                        category="ingestion.neo4j.policy",
+                        params={"session_id": session.id, "policy_id": pol.id, "error": str(e)},
+                    )
         
         # Complete
         yield ProgressEvent(
@@ -684,8 +765,23 @@ async def run_ingestion_workflow(
                 }
             }
         )
+        SmartLogger.log(
+            "INFO",
+            "Ingestion workflow complete",
+            category="ingestion.workflow",
+            params={
+                "session_id": session.id,
+                "user_stories": len(user_stories),
+                "bounded_contexts": len(bc_candidates),
+                "aggregates": sum(len(aggs) for aggs in all_aggregates.values()),
+                "commands": sum(len(cmds) for cmds in all_commands.values()),
+                "events": sum(len(evts) for evts in all_events.values()),
+                "policies": len(policies),
+            },
+        )
         
     except Exception as e:
+        SmartLogger.log("ERROR", "Ingestion workflow failed", category="ingestion.workflow", params={"session_id": session.id, "error": str(e)})
         yield ProgressEvent(
             phase=IngestionPhase.ERROR,
             message=f"❌ 오류 발생: {str(e)}",
@@ -714,6 +810,12 @@ async def upload_document(
     if file:
         file_content = await file.read()
         filename = file.filename or ""
+        SmartLogger.log(
+            "INFO",
+            "Upload received (file)",
+            category="ingestion.api.upload",
+            params={"filename": filename, "bytes": len(file_content)},
+        )
         
         if filename.lower().endswith('.pdf'):
             content = extract_text_from_pdf(file_content)
@@ -725,6 +827,12 @@ async def upload_document(
                 content = file_content.decode('latin-1')
     elif text:
         content = text
+        SmartLogger.log(
+            "INFO",
+            "Upload received (text)",
+            category="ingestion.api.upload",
+            params={"chars": len(content)},
+        )
     else:
         raise HTTPException(
             status_code=400,
@@ -740,6 +848,12 @@ async def upload_document(
     # Create session
     session = create_session()
     session.content = content
+    SmartLogger.log(
+        "INFO",
+        "Ingestion session created",
+        category="ingestion.api.upload",
+        params={"session_id": session.id, "content_length": len(content)},
+    )
     
     return {
         "session_id": session.id,
@@ -758,7 +872,9 @@ async def stream_progress(session_id: str):
     session = get_session(session_id)
     
     if not session:
+        SmartLogger.log("WARNING", "Ingestion stream requested for missing session", category="ingestion.api.stream", params={"session_id": session_id})
         raise HTTPException(status_code=404, detail="Session not found")
+    SmartLogger.log("INFO", "Ingestion stream connected", category="ingestion.api.stream", params={"session_id": session_id})
     
     async def event_generator():
         async for event in run_ingestion_workflow(session, session.content):
@@ -771,6 +887,7 @@ async def stream_progress(session_id: str):
         # Clean up session after completion
         if session_id in _sessions:
             del _sessions[session_id]
+        SmartLogger.log("INFO", "Ingestion session cleaned up", category="ingestion.api.stream", params={"session_id": session_id})
     
     return EventSourceResponse(event_generator())
 
@@ -778,6 +895,7 @@ async def stream_progress(session_id: str):
 @router.get("/sessions")
 async def list_sessions() -> list[dict[str, Any]]:
     """List all active ingestion sessions."""
+    SmartLogger.log("INFO", "List ingestion sessions", category="ingestion.api.sessions", params={"active": len(_sessions)})
     return [
         {
             "id": s.id,
@@ -800,6 +918,7 @@ async def clear_all_data() -> dict[str, Any]:
     client = get_neo4j_client()
     
     try:
+        SmartLogger.log("WARNING", "Clear-all requested", category="ingestion.api.clear_all")
         with client.session() as session:
             # Get counts before deletion
             count_query = """
@@ -817,6 +936,7 @@ async def clear_all_data() -> dict[str, Any]:
             DETACH DELETE n
             """
             session.run(delete_query)
+            SmartLogger.log("INFO", "Clear-all completed", category="ingestion.api.clear_all", params={"deleted": before_counts})
             
             return {
                 "success": True,
@@ -824,6 +944,7 @@ async def clear_all_data() -> dict[str, Any]:
                 "deleted": before_counts
             }
     except Exception as e:
+        SmartLogger.log("ERROR", "Clear-all failed", category="ingestion.api.clear_all", params={"error": str(e)})
         return {
             "success": False,
             "message": f"삭제 실패: {str(e)}",
@@ -841,6 +962,7 @@ async def get_data_stats() -> dict[str, Any]:
     client = get_neo4j_client()
     
     try:
+        SmartLogger.log("INFO", "Ingestion stats requested", category="ingestion.api.stats")
         with client.session() as session:
             query = """
             MATCH (n)
@@ -852,6 +974,7 @@ async def get_data_stats() -> dict[str, Any]:
             counts = {item["label"]: item["count"] for item in record["counts"]} if record else {}
             
             total = sum(counts.values())
+            SmartLogger.log("INFO", "Ingestion stats returned", category="ingestion.api.stats", params={"total": total, "counts": counts})
             
             return {
                 "total": total,
@@ -859,6 +982,7 @@ async def get_data_stats() -> dict[str, Any]:
                 "hasData": total > 0
             }
     except Exception as e:
+        SmartLogger.log("ERROR", "Ingestion stats failed", category="ingestion.api.stats", params={"error": str(e)})
         return {
             "total": 0,
             "counts": {},

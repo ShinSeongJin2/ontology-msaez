@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useCanvasStore } from './canvas'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
 
 /**
  * Store for managing chat-based model modification with ReAct pattern.
@@ -11,7 +11,7 @@ import { useCanvasStore } from './canvas'
  * 3) Watch the agent reason and act (ReAct) to make changes
  * 4) Apply changes (streamed via SSE)
  */
-export const useChatStore = defineStore('chat', () => {
+export const useModelModifierStore = defineStore('modelModifier', () => {
   const canvasStore = useCanvasStore()
 
   // Message history

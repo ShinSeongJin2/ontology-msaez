@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
-import { useCanvasStore } from '../../stores/canvas'
-import { useTerminologyStore } from '../../stores/terminology'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
+import { useTerminologyStore } from '@/features/terminology/terminology.store'
 
 const props = defineProps({
   id: String,

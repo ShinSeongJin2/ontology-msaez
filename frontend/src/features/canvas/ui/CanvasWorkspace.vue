@@ -4,7 +4,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
-import { useCanvasStore } from '../stores/canvas'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
 
 // Custom Nodes
 import CommandNode from './nodes/CommandNode.vue'
@@ -14,7 +14,7 @@ import AggregateNode from './nodes/AggregateNode.vue'
 import BoundedContextNode from './nodes/BoundedContextNode.vue'
 
 // Chat Panel
-import ChatPanel from './ChatPanel.vue'
+import ChatPanel from '@/features/modelModifier/ui/ChatPanel.vue'
 
 const canvasStore = useCanvasStore()
 const isDragOver = ref(false)

@@ -12,7 +12,7 @@ import { ref, computed } from 'vue'
  * 5. If feedback provided, LLM revises the plan
  * 6. Once approved, changes are applied to Neo4j
  */
-export const useChangeStore = defineStore('change', () => {
+export const useUserStoryChangeWorkflowStore = defineStore('userStoryChangeWorkflow', () => {
   // State
   const isAnalyzing = ref(false)
   const isApplying = ref(false)

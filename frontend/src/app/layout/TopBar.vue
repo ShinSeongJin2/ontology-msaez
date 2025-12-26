@@ -1,9 +1,9 @@
 <script setup>
 import { ref } from 'vue'
-import { useCanvasStore } from '../stores/canvas'
-import { useTerminologyStore } from '../stores/terminology'
-import IngestionModal from './IngestionModal.vue'
-import PRDGeneratorModal from './PRDGeneratorModal.vue'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
+import { useTerminologyStore } from '@/features/terminology/terminology.store'
+import RequirementsIngestionModal from '@/features/requirementsIngestion/ui/RequirementsIngestionModal.vue'
+import PRDGeneratorModal from '@/features/prdGeneration/ui/PRDGeneratorModal.vue'
 
 const canvasStore = useCanvasStore()
 const terminologyStore = useTerminologyStore()
@@ -98,7 +98,7 @@ function handleIngestionComplete() {
     </button>
     
     <!-- Ingestion Modal -->
-    <IngestionModal 
+    <RequirementsIngestionModal 
       v-model="showIngestionModal"
       @complete="handleIngestionComplete"
     />

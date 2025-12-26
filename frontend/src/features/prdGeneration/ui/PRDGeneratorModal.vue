@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { useCanvasStore } from '../stores/canvas'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
 
 const props = defineProps({
   visible: {

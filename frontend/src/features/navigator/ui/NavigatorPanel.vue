@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
-import { useNavigatorStore } from '../stores/navigator'
-import { useTerminologyStore } from '../stores/terminology'
+import { useNavigatorStore } from '@/features/navigator/navigator.store'
+import { useTerminologyStore } from '@/features/terminology/terminology.store'
 import TreeNode from './TreeNode.vue'
 
 const navigatorStore = useNavigatorStore()

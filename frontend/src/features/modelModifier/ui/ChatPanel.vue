@@ -1,9 +1,9 @@
 <script setup>
 import { ref, computed, nextTick, watch } from 'vue'
-import { useChatStore } from '../stores/chat'
-import { useCanvasStore } from '../stores/canvas'
+import { useModelModifierStore } from '@/features/modelModifier/modelModifier.store'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
 
-const chatStore = useChatStore()
+const chatStore = useModelModifierStore()
 const canvasStore = useCanvasStore()
 
 const inputText = ref('')

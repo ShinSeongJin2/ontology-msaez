@@ -1,7 +1,8 @@
 <script setup>
-import { computed, ref, onMounted, inject } from 'vue'
-import { useNavigatorStore } from '../stores/navigator'
-import { useCanvasStore } from '../stores/canvas'
+import { computed, ref, onMounted } from 'vue'
+import { useNavigatorStore } from '@/features/navigator/navigator.store'
+import { useCanvasStore } from '@/features/canvas/canvas.store'
+import { useUserStoryEditorStore } from '@/features/userStories/userStoryEditor.store'
 
 const props = defineProps({
   node: {
@@ -20,9 +21,7 @@ const props = defineProps({
 
 const navigatorStore = useNavigatorStore()
 const canvasStore = useCanvasStore()
-
-// Inject edit function from App.vue
-const editUserStory = inject('editUserStory', null)
+const userStoryEditor = useUserStoryEditorStore()
 
 const isDragging = ref(false)
 const showEntrance = ref(false)
@@ -128,10 +127,8 @@ function toggleExpand() {
 // Double click handler - for UserStory opens edit modal, for others adds to canvas
 async function handleDoubleClick() {
   if (props.node.type === 'UserStory') {
-    // Open edit modal for user stories
-    if (editUserStory) {
-      editUserStory(props.node)
-    }
+    // Open edit modal for user stories (User Stories feature)
+    userStoryEditor.open(props.node)
   } else {
     // Add other node types to canvas
     await addToCanvas()

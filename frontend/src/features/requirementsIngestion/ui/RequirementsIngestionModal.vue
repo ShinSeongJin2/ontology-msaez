@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onUnmounted } from 'vue'
-import { useNavigatorStore } from '../stores/navigator'
+import { useNavigatorStore } from '@/features/navigator/navigator.store'
 
 const props = defineProps({
   modelValue: {

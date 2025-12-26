@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useChangeStore } from '../stores/change'
+import { useUserStoryChangeWorkflowStore } from '@/features/userStories/userStoryChangeWorkflow.store'
 
 const props = defineProps({
   userStory: {
@@ -15,7 +15,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'saved'])
 
-const changeStore = useChangeStore()
+const changeStore = useUserStoryChangeWorkflowStore()
 
 // Form state - editable fields
 const editedRole = ref('')

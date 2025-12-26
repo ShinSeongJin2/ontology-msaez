@@ -1,52 +1,33 @@
 <script setup>
-import { ref, provide } from 'vue'
-import TopBar from './components/TopBar.vue'
-import LeftPanel from './components/LeftPanel.vue'
-import RightPanel from './components/RightPanel.vue'
-import UserStoryEditModal from './components/UserStoryEditModal.vue'
-import { useCanvasStore } from './stores/canvas'
-import { useNavigatorStore } from './stores/navigator'
+import TopBar from '@/app/layout/TopBar.vue'
+import NavigatorPanel from '@/features/navigator/ui/NavigatorPanel.vue'
+import CanvasWorkspace from '@/features/canvas/ui/CanvasWorkspace.vue'
+import UserStoryEditModal from '@/features/userStories/ui/UserStoryEditModal.vue'
+import { useNavigatorStore } from '@/features/navigator/navigator.store'
+import { useUserStoryEditorStore } from '@/features/userStories/userStoryEditor.store'
 
-const canvasStore = useCanvasStore()
 const navigatorStore = useNavigatorStore()
-
-// User Story Edit Modal state
-const showEditModal = ref(false)
-const editingUserStory = ref(null)
-
-function handleEditUserStory(userStory) {
-  editingUserStory.value = userStory
-  showEditModal.value = true
-}
-
-function handleCloseEditModal() {
-  showEditModal.value = false
-  editingUserStory.value = null
-}
+const userStoryEditor = useUserStoryEditorStore()
 
 async function handleUserStorySaved() {
   // Refresh the navigator to reflect changes
   await navigatorStore.refreshAll()
 }
-
-// Provide canvas store and edit function to child components
-provide('canvasStore', canvasStore)
-provide('editUserStory', handleEditUserStory)
 </script>
 
 <template>
   <div class="app-container">
     <TopBar />
     <div class="main-content">
-      <LeftPanel />
-      <RightPanel />
+      <NavigatorPanel />
+      <CanvasWorkspace />
     </div>
     
     <!-- User Story Edit Modal -->
     <UserStoryEditModal 
-      :visible="showEditModal"
-      :user-story="editingUserStory"
-      @close="handleCloseEditModal"
+      :visible="userStoryEditor.isOpen"
+      :user-story="userStoryEditor.userStory"
+      @close="userStoryEditor.close()"
       @saved="handleUserStorySaved"
     />
   </div>

@@ -70,26 +70,19 @@ def _resolve_impl() -> tuple[type[_SmartLoggerLike], str]:
     _safe_setdefault_env("SMART_LOGGER_FILE_OUTPUT", "False")
     _safe_setdefault_env("SMART_LOGGER_REMOVE_LOG_ON_CREATE", "False")
 
-    try:
-        from p_utils.smart_logger import SmartLogger as DefaultSmartLogger
+    class _FallbackLogger:
+        @classmethod
+        def log(
+            cls,
+            level: str,
+            message: str,
+            category: str | None = None,
+            params: dict | None = None,
+            max_inline_chars: int = 100,
+        ) -> None:
+            print(f"{level}: {message}")
 
-        return DefaultSmartLogger, "p_utils.smart_logger.SmartLogger"
-    except Exception:
-        # Ultra-safe fallback: don't crash imports just because logger failed.
-        class _FallbackLogger:
-            @classmethod
-            def log(
-                cls,
-                level: str,
-                message: str,
-                category: str | None = None,
-                params: dict | None = None,
-                max_inline_chars: int = 100,
-            ) -> None:
-                print(f"{level}: {message}")
-
-        return _FallbackLogger, "fallback(print)"
-
+    return _FallbackLogger, "fallback(print)"
 
 _IMPL, _IMPL_SOURCE = _resolve_impl()
 

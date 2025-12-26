@@ -9,18 +9,18 @@ Provides REST APIs for:
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 from contextlib import asynccontextmanager
 from typing import Any
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 
 from api.smart_logger import SmartLogger
-
-load_dotenv()
 
 # Neo4j Configuration
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -1339,5 +1339,10 @@ async def get_event_triggers(event_id: str) -> dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
+
+    HOST = os.getenv("API_HOST", "0.0.0.0")
+    PORT = os.getenv("API_PORT", 8000)
+
+    SmartLogger.log("INFO", "Starting API", category="api.main", params={"host": HOST, "port": PORT})
+    uvicorn.run("api.main:app", host=HOST, port=PORT, reload=True)
 

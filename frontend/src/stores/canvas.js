@@ -5,6 +5,9 @@ export const useCanvasStore = defineStore('canvas', () => {
   // Nodes on the canvas
   const nodes = ref([])
   const edges = ref([])
+
+  // Selected nodes (for chat-based modification)
+  const selectedNodeIds = ref(new Set())
   
   // Track BC containers and their children
   const bcContainers = ref({}) // { bcId: { nodeIds: [], bounds: {} } }
@@ -40,6 +43,45 @@ export const useCanvasStore = defineStore('canvas', () => {
   
   // Get all node IDs currently on canvas
   const nodeIds = computed(() => nodes.value.map(n => n.id))
+
+  // Selected nodes list (derived)
+  const selectedNodes = computed(() => nodes.value.filter(n => selectedNodeIds.value.has(n.id)))
+
+  // Selection helpers
+  function isSelected(nodeId) {
+    return selectedNodeIds.value.has(nodeId)
+  }
+
+  function toggleNodeSelection(nodeId) {
+    if (selectedNodeIds.value.has(nodeId)) {
+      selectedNodeIds.value.delete(nodeId)
+    } else {
+      selectedNodeIds.value.add(nodeId)
+    }
+    selectedNodeIds.value = new Set(selectedNodeIds.value)
+  }
+
+  function selectNode(nodeId) {
+    selectedNodeIds.value = new Set([nodeId])
+  }
+
+  function addToSelection(nodeId) {
+    selectedNodeIds.value.add(nodeId)
+    selectedNodeIds.value = new Set(selectedNodeIds.value)
+  }
+
+  function removeFromSelection(nodeId) {
+    selectedNodeIds.value.delete(nodeId)
+    selectedNodeIds.value = new Set(selectedNodeIds.value)
+  }
+
+  function clearSelection() {
+    selectedNodeIds.value = new Set()
+  }
+
+  function selectNodes(nodeIdArray) {
+    selectedNodeIds.value = new Set(nodeIdArray || [])
+  }
   
   // Check if a node is on canvas
   function isOnCanvas(nodeId) {
@@ -521,6 +563,12 @@ export const useCanvasStore = defineStore('canvas', () => {
     
     nodes.value = nodes.value.filter(n => n.id !== nodeId)
     edges.value = edges.value.filter(e => e.source !== nodeId && e.target !== nodeId)
+
+    // Also remove from selection if present
+    if (selectedNodeIds.value.has(nodeId)) {
+      selectedNodeIds.value.delete(nodeId)
+      selectedNodeIds.value = new Set(selectedNodeIds.value)
+    }
   }
   
   // Clear canvas
@@ -528,6 +576,83 @@ export const useCanvasStore = defineStore('canvas', () => {
     nodes.value = []
     edges.value = []
     bcContainers.value = {}
+    selectedNodeIds.value = new Set()
+  }
+
+  // Add a new node to an existing BC on canvas (used by chat create action)
+  function addNodeToBC(nodeData, bcId) {
+    if (isOnCanvas(nodeData.id)) return null
+
+    const bcNode = nodes.value.find(n => n.id === bcId && n.type === 'boundedcontext')
+    if (!bcNode) return null
+
+    const position = calculatePositionInBC(bcId, nodeData.type, 0)
+    const node = {
+      id: nodeData.id,
+      type: nodeData.type.toLowerCase(),
+      position,
+      data: {
+        ...nodeData,
+        label: nodeData.name,
+        bcId
+      },
+      parentNode: bcId,
+      extent: 'parent'
+    }
+
+    nodes.value.push(node)
+    updateBCSize(bcId)
+    return node
+  }
+
+  // Sync canvas with applied chat changes
+  function syncAfterChanges(changes) {
+    for (const change of changes || []) {
+      const action = change.action
+      const targetId = change.targetId
+
+      if (!action || !targetId) continue
+
+      if (action === 'rename' || action === 'update') {
+        const idx = nodes.value.findIndex(n => n.id === targetId)
+        if (idx !== -1) {
+          const existing = nodes.value[idx]
+          const nextName = change.targetName || existing.data?.name
+          nodes.value[idx] = {
+            ...existing,
+            data: {
+              ...existing.data,
+              name: nextName,
+              label: nextName || existing.data?.label,
+              description: change.description || existing.data?.description
+            }
+          }
+          nodes.value = [...nodes.value]
+        }
+      } else if (action === 'create') {
+        const bcId = change.targetBcId || change.bcId
+        if (bcId && isOnCanvas(bcId)) {
+          addNodeToBC(
+            {
+              id: targetId,
+              name: change.targetName,
+              type: change.targetType,
+              description: change.description,
+              bcId
+            },
+            bcId
+          )
+        }
+      } else if (action === 'delete') {
+        removeNode(targetId)
+      } else if (action === 'connect') {
+        const sourceId = change.sourceId
+        const connectionType = change.connectionType || 'TRIGGERS'
+        if (sourceId && isOnCanvas(sourceId) && isOnCanvas(targetId)) {
+          addEdge(sourceId, targetId, connectionType)
+        }
+      }
+    }
   }
   
   // Update node position
@@ -867,10 +992,19 @@ export const useCanvasStore = defineStore('canvas', () => {
   return {
     nodes,
     edges,
+    selectedNodeIds,
+    selectedNodes,
     nodeIds,
     nodeTypeConfig,
     bcContainers,
     isOnCanvas,
+    isSelected,
+    toggleNodeSelection,
+    selectNode,
+    addToSelection,
+    removeFromSelection,
+    clearSelection,
+    selectNodes,
     addNode,
     addNodesWithLayout,
     addEdge,
@@ -881,6 +1015,8 @@ export const useCanvasStore = defineStore('canvas', () => {
     findAndAddRelations,
     findCrossBCRelations,
     findAvoidingPosition,
-    expandEventTriggers
+    expandEventTriggers,
+    addNodeToBC,
+    syncAfterChanges
   }
 })

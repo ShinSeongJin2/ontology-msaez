@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Optional, List
 
 from dotenv import load_dotenv
@@ -22,8 +23,26 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
 from api.smart_logger import SmartLogger
+from api.request_logging import summarize_for_log, sha256_text
 
 load_dotenv()
+
+
+# =============================================================================
+# LLM Audit Logging (prompt/output + performance)
+# =============================================================================
+
+
+def _env_flag(key: str, default: bool = False) -> bool:
+    val = (os.getenv(key) or "").strip().lower()
+    if not val:
+        return default
+    return val in {"1", "true", "yes", "y", "on"}
+
+
+AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
+AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
+AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
 
 
 # =============================================================================
@@ -283,10 +302,51 @@ def generate_change_plan(
     # Use structured output
     structured_llm = llm.with_structured_output(ChangePlan)
     
-    response = structured_llm.invoke([
-        SystemMessage(content=CHANGE_PLANNER_SYSTEM_PROMPT),
-        HumanMessage(content=prompt)
-    ])
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Change planner: LLM invoke starting.",
+            category="agent.change_planner.llm.start",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "user_story_id": user_story_id,
+                "revision_mode": bool(feedback and previous_plan),
+                "impacted_nodes_count": len(impacted_nodes or []),
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_len": len(CHANGE_PLANNER_SYSTEM_PROMPT),
+                "system_sha256": sha256_text(CHANGE_PLANNER_SYSTEM_PROMPT),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
+    response = structured_llm.invoke(
+        [SystemMessage(content=CHANGE_PLANNER_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+    )
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    if AI_AUDIT_LOG_ENABLED:
+        try:
+            resp_dump = response.model_dump() if hasattr(response, "model_dump") else response.dict()
+        except Exception:
+            resp_dump = {"__type__": type(response).__name__, "__repr__": repr(response)[:1000]}
+        SmartLogger.log(
+            "INFO",
+            "Change planner: LLM invoke completed.",
+            category="agent.change_planner.llm.done",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "user_story_id": user_story_id,
+                "llm_ms": llm_ms,
+                "changes_count": len(getattr(response, "changes", []) or []),
+                "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+            },
+            max_inline_chars=1800,
+        )
     
     # Convert to dict format for API response
     changes = []

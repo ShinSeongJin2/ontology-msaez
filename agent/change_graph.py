@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import json
+import time
 from collections import Counter
 from typing import Any, Optional, List, Dict
 from enum import Enum
@@ -30,9 +31,27 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from api.smart_logger import SmartLogger
-from api.request_logging import summarize_for_log
+from api.request_logging import summarize_for_log, sha256_text
 
 load_dotenv()
+
+
+# =============================================================================
+# LLM Audit Logging (prompt/output + performance)
+# =============================================================================
+
+
+def _env_flag(key: str, default: bool = False) -> bool:
+    val = (os.getenv(key) or "").strip().lower()
+    if not val:
+        return default
+    return val in {"1", "true", "yes", "y", "on"}
+
+
+# Global toggles (shared across backend modules)
+AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
+AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
+AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
 
 
 # =============================================================================
@@ -628,10 +647,51 @@ def propagate_impacts_node(state: ChangePlanningState) -> Dict[str, Any]:
                     max_inline_chars=1200,
                 )
 
-                response = llm.invoke([
-                    SystemMessage(content="You are a DDD expert performing iterative impact propagation with evidence."),
-                    HumanMessage(content=prompt),
-                ])
+                provider = os.getenv("LLM_PROVIDER", "openai")
+                model = os.getenv("LLM_MODEL", "gpt-4o")
+                system_msg = "You are a DDD expert performing iterative impact propagation with evidence."
+
+                if AI_AUDIT_LOG_ENABLED:
+                    SmartLogger.log(
+                        "INFO",
+                        "Impact propagation: LLM invoke starting.",
+                        category="agent.change_graph.propagation.llm.start",
+                        params={
+                            "user_story_id": state.user_story_id,
+                            "round": round_idx,
+                            "llm": {"provider": provider, "model": model},
+                            "round_budget": round_budget,
+                            "union_node_count": len(union_node_ids),
+                            "prompt_len": len(prompt),
+                            "prompt_sha256": sha256_text(prompt),
+                            "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                            "system_len": len(system_msg),
+                            "system_sha256": sha256_text(system_msg),
+                        },
+                        max_inline_chars=1800,
+                    )
+
+                t_llm0 = time.perf_counter()
+                response = llm.invoke([SystemMessage(content=system_msg), HumanMessage(content=prompt)])
+                llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+                resp_text = getattr(response, "content", "") or ""
+                if AI_AUDIT_LOG_ENABLED:
+                    SmartLogger.log(
+                        "INFO",
+                        "Impact propagation: LLM invoke completed.",
+                        category="agent.change_graph.propagation.llm.done",
+                        params={
+                            "user_story_id": state.user_story_id,
+                            "round": round_idx,
+                            "llm": {"provider": provider, "model": model},
+                            "llm_ms": llm_ms,
+                            "response_len": len(resp_text),
+                            "response_sha256": sha256_text(resp_text),
+                            "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
+                        },
+                        max_inline_chars=1800,
+                    )
 
                 parsed: Dict[str, Any] = {}
                 try:
@@ -908,10 +968,47 @@ Respond in this exact JSON format:
     "change_description": "Brief description of what changed"
 }}"""
 
-    response = llm.invoke([
-        SystemMessage(content="You are a DDD expert analyzing change impact."),
-        HumanMessage(content=prompt)
-    ])
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    system_msg = "You are a DDD expert analyzing change impact."
+
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Scope analysis: LLM invoke starting.",
+            category="agent.change_graph.scope.llm.start",
+            params={
+                "user_story_id": state.user_story_id,
+                "llm": {"provider": provider, "model": model},
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_len": len(system_msg),
+                "system_sha256": sha256_text(system_msg),
+            },
+            max_inline_chars=1600,
+        )
+
+    t_llm0 = time.perf_counter()
+    response = llm.invoke([SystemMessage(content=system_msg), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    resp_text = getattr(response, "content", "") or ""
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Scope analysis: LLM invoke completed.",
+            category="agent.change_graph.scope.llm.done",
+            params={
+                "user_story_id": state.user_story_id,
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "response_len": len(resp_text),
+                "response_sha256": sha256_text(resp_text),
+                "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
+            },
+            max_inline_chars=1600,
+        )
     
     try:
         # Extract JSON from response
@@ -1187,13 +1284,52 @@ Respond in this exact JSON format:
     ]
 }}"""
 
-    response = llm.invoke([
-        SystemMessage(content="""You are a DDD expert creating change plans.
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    system_msg = """You are a DDD expert creating change plans.
 When connecting BCs, always use the Event-Policy-Command pattern:
 - Event (from source BC) TRIGGERS Policy
-- Policy INVOKES Command (in target BC)"""),
-        HumanMessage(content=prompt)
-    ])
+- Policy INVOKES Command (in target BC)"""
+
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Plan finalization: LLM invoke starting.",
+            category="agent.change_graph.plan_finalizer.llm.start",
+            params={
+                "user_story_id": state.user_story_id,
+                "scope": state.change_scope.value if state.change_scope else None,
+                "llm": {"provider": provider, "model": model},
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_len": len(system_msg),
+                "system_sha256": sha256_text(system_msg),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
+    response = llm.invoke([SystemMessage(content=system_msg), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    resp_text = getattr(response, "content", "") or ""
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Plan finalization: LLM invoke completed.",
+            category="agent.change_graph.plan_finalizer.llm.done",
+            params={
+                "user_story_id": state.user_story_id,
+                "scope": state.change_scope.value if state.change_scope else None,
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "response_len": len(resp_text),
+                "response_sha256": sha256_text(resp_text),
+                "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
+            },
+            max_inline_chars=1800,
+        )
     
     try:
         content = response.content
@@ -1313,10 +1449,49 @@ Provide the revised plan in the same JSON format:
     "changes": [...]
 }}"""
 
-    response = llm.invoke([
-        SystemMessage(content="You are revising a change plan based on user feedback."),
-        HumanMessage(content=prompt)
-    ])
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    system_msg = "You are revising a change plan based on user feedback."
+
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Plan revision: LLM invoke starting.",
+            category="agent.change_graph.plan_revision.llm.start",
+            params={
+                "user_story_id": state.user_story_id,
+                "revision_count": state.revision_count,
+                "llm": {"provider": provider, "model": model},
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_len": len(system_msg),
+                "system_sha256": sha256_text(system_msg),
+            },
+            max_inline_chars=1600,
+        )
+
+    t_llm0 = time.perf_counter()
+    response = llm.invoke([SystemMessage(content=system_msg), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    resp_text = getattr(response, "content", "") or ""
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Plan revision: LLM invoke completed.",
+            category="agent.change_graph.plan_revision.llm.done",
+            params={
+                "user_story_id": state.user_story_id,
+                "revision_count": state.revision_count,
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "response_len": len(resp_text),
+                "response_sha256": sha256_text(resp_text),
+                "response": resp_text if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_text),
+            },
+            max_inline_chars=1600,
+        )
     
     try:
         content = response.content

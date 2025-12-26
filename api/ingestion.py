@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import uuid
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, AsyncGenerator, Optional
@@ -30,6 +31,23 @@ from api.request_logging import http_context, summarize_for_log, sha256_bytes, s
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 router = APIRouter(prefix="/api/ingest", tags=["ingestion"])
+
+
+# =============================================================================
+# LLM Audit Logging (prompt/output + performance)
+# =============================================================================
+
+
+def _env_flag(key: str, default: bool = False) -> bool:
+    val = (os.getenv(key) or "").strip().lower()
+    if not val:
+        return default
+    return val in {"1", "true", "yes", "y", "on"}
+
+
+AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
+AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
+AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
 
 
 # =============================================================================
@@ -209,11 +227,55 @@ def extract_user_stories_from_text(text: str) -> list[GeneratedUserStory]:
 User Story는 명확하고 테스트 가능해야 합니다."""
     
     prompt = EXTRACT_USER_STORIES_PROMPT.format(requirements=text[:8000])  # Limit context
-    
-    response = structured_llm.invoke([
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=prompt)
-    ])
+
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "Ingestion: extract user stories - LLM invoke starting.",
+            category="ingestion.llm.user_stories.start",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "inputs": {
+                    "requirements_len": len(text),
+                    "requirements_sha256": sha256_text(text),
+                    "requirements_truncated_len": min(len(text), 8000),
+                },
+                "system_len": len(system_prompt),
+                "system_sha256": sha256_text(system_prompt),
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
+    response = structured_llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    if AI_AUDIT_LOG_ENABLED:
+        try:
+            resp_dump = response.model_dump() if hasattr(response, "model_dump") else response.dict()
+        except Exception:
+            resp_dump = {"__type__": type(response).__name__, "__repr__": repr(response)[:1000]}
+        stories = getattr(response, "user_stories", []) or []
+        SmartLogger.log(
+            "INFO",
+            "Ingestion: extract user stories - LLM invoke completed.",
+            category="ingestion.llm.user_stories.done",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "result": {
+                    "user_stories_count": len(stories),
+                    "user_story_ids": summarize_for_log([getattr(s, "id", None) for s in stories]),
+                    "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                },
+            },
+            max_inline_chars=1800,
+        )
     
     return response.user_stories
 
@@ -337,11 +399,52 @@ async def run_ingestion_workflow(
         
         structured_llm = llm.with_structured_output(BoundedContextList)
         prompt = IDENTIFY_BC_FROM_STORIES_PROMPT.format(user_stories=stories_text)
-        
-        bc_response = structured_llm.invoke([
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=prompt)
-        ])
+
+        provider = os.getenv("LLM_PROVIDER", "openai")
+        model = os.getenv("LLM_MODEL", "gpt-4o")
+        if AI_AUDIT_LOG_ENABLED:
+            SmartLogger.log(
+                "INFO",
+                "Ingestion: identify BCs - LLM invoke starting.",
+                category="ingestion.llm.identify_bc.start",
+                params={
+                    "session_id": session.id,
+                    "llm": {"provider": provider, "model": model},
+                    "user_stories_count": len(user_stories),
+                    "prompt_len": len(prompt),
+                    "prompt_sha256": sha256_text(prompt),
+                    "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                    "system_sha256": sha256_text(SYSTEM_PROMPT),
+                },
+                max_inline_chars=1800,
+            )
+
+        t_llm0 = time.perf_counter()
+        bc_response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+        llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+        if AI_AUDIT_LOG_ENABLED:
+            try:
+                resp_dump = bc_response.model_dump() if hasattr(bc_response, "model_dump") else bc_response.dict()
+            except Exception:
+                resp_dump = {"__type__": type(bc_response).__name__, "__repr__": repr(bc_response)[:1000]}
+            bcs = getattr(bc_response, "bounded_contexts", []) or []
+            SmartLogger.log(
+                "INFO",
+                "Ingestion: identify BCs - LLM invoke completed.",
+                category="ingestion.llm.identify_bc.done",
+                params={
+                    "session_id": session.id,
+                    "llm": {"provider": provider, "model": model},
+                    "llm_ms": llm_ms,
+                    "result": {
+                        "bounded_contexts_count": len(bcs),
+                        "bounded_context_ids": summarize_for_log([getattr(bc, "id", None) for bc in bcs]),
+                        "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                    },
+                },
+                max_inline_chars=1800,
+            )
         
         bc_candidates = bc_response.bounded_contexts
         SmartLogger.log(
@@ -434,11 +537,53 @@ async def run_ingestion_workflow(
             )
             
             structured_llm = llm.with_structured_output(AggregateList)
-            
-            agg_response = structured_llm.invoke([
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt)
-            ])
+
+            provider = os.getenv("LLM_PROVIDER", "openai")
+            model = os.getenv("LLM_MODEL", "gpt-4o")
+            if AI_AUDIT_LOG_ENABLED:
+                SmartLogger.log(
+                    "INFO",
+                    "Ingestion: extract aggregates - LLM invoke starting.",
+                    category="ingestion.llm.extract_aggregates.start",
+                    params={
+                        "session_id": session.id,
+                        "llm": {"provider": provider, "model": model},
+                        "bc": {"id": bc.id, "name": bc.name},
+                        "prompt_len": len(prompt),
+                        "prompt_sha256": sha256_text(prompt),
+                        "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                        "system_sha256": sha256_text(SYSTEM_PROMPT),
+                    },
+                    max_inline_chars=1800,
+                )
+
+            t_llm0 = time.perf_counter()
+            agg_response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+            llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+            if AI_AUDIT_LOG_ENABLED:
+                try:
+                    resp_dump = agg_response.model_dump() if hasattr(agg_response, "model_dump") else agg_response.dict()
+                except Exception:
+                    resp_dump = {"__type__": type(agg_response).__name__, "__repr__": repr(agg_response)[:1000]}
+                aggs = getattr(agg_response, "aggregates", []) or []
+                SmartLogger.log(
+                    "INFO",
+                    "Ingestion: extract aggregates - LLM invoke completed.",
+                    category="ingestion.llm.extract_aggregates.done",
+                    params={
+                        "session_id": session.id,
+                        "llm": {"provider": provider, "model": model},
+                        "bc": {"id": bc.id, "name": bc.name},
+                        "llm_ms": llm_ms,
+                        "result": {
+                            "aggregates_count": len(aggs),
+                            "aggregate_ids": summarize_for_log([getattr(a, "id", None) for a in aggs]),
+                            "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                        },
+                    },
+                    max_inline_chars=1800,
+                )
             
             aggregates = agg_response.aggregates
             all_aggregates[bc.id] = aggregates
@@ -507,11 +652,60 @@ async def run_ingestion_workflow(
                 structured_llm = llm.with_structured_output(CommandList)
                 
                 try:
-                    cmd_response = structured_llm.invoke([
-                        SystemMessage(content=SYSTEM_PROMPT),
-                        HumanMessage(content=prompt)
-                    ])
+                    provider = os.getenv("LLM_PROVIDER", "openai")
+                    model = os.getenv("LLM_MODEL", "gpt-4o")
+                    if AI_AUDIT_LOG_ENABLED:
+                        SmartLogger.log(
+                            "INFO",
+                            "Ingestion: extract commands - LLM invoke starting.",
+                            category="ingestion.llm.extract_commands.start",
+                            params={
+                                "session_id": session.id,
+                                "llm": {"provider": provider, "model": model},
+                                "bc": {"id": bc.id, "name": bc.name},
+                                "aggregate": {"id": agg.id, "name": agg.name},
+                                "prompt_len": len(prompt),
+                                "prompt_sha256": sha256_text(prompt),
+                                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                                "system_sha256": sha256_text(SYSTEM_PROMPT),
+                            },
+                            max_inline_chars=1800,
+                        )
+
+                    t_llm0 = time.perf_counter()
+                    cmd_response = structured_llm.invoke(
+                        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
+                    )
+                    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
                     commands = cmd_response.commands
+
+                    if AI_AUDIT_LOG_ENABLED:
+                        try:
+                            resp_dump = (
+                                cmd_response.model_dump()
+                                if hasattr(cmd_response, "model_dump")
+                                else cmd_response.dict()
+                            )
+                        except Exception:
+                            resp_dump = {"__type__": type(cmd_response).__name__, "__repr__": repr(cmd_response)[:1000]}
+                        SmartLogger.log(
+                            "INFO",
+                            "Ingestion: extract commands - LLM invoke completed.",
+                            category="ingestion.llm.extract_commands.done",
+                            params={
+                                "session_id": session.id,
+                                "llm": {"provider": provider, "model": model},
+                                "bc": {"id": bc.id, "name": bc.name},
+                                "aggregate": {"id": agg.id, "name": agg.name},
+                                "llm_ms": llm_ms,
+                                "result": {
+                                    "commands_count": len(commands),
+                                    "command_ids": summarize_for_log([getattr(c, "id", None) for c in commands]),
+                                    "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                                },
+                            },
+                            max_inline_chars=1800,
+                        )
                 except Exception as e:
                     SmartLogger.log(
                         "WARNING",
@@ -590,11 +784,60 @@ async def run_ingestion_workflow(
                 structured_llm = llm.with_structured_output(EventList)
                 
                 try:
-                    evt_response = structured_llm.invoke([
-                        SystemMessage(content=SYSTEM_PROMPT),
-                        HumanMessage(content=prompt)
-                    ])
+                    provider = os.getenv("LLM_PROVIDER", "openai")
+                    model = os.getenv("LLM_MODEL", "gpt-4o")
+                    if AI_AUDIT_LOG_ENABLED:
+                        SmartLogger.log(
+                            "INFO",
+                            "Ingestion: extract events - LLM invoke starting.",
+                            category="ingestion.llm.extract_events.start",
+                            params={
+                                "session_id": session.id,
+                                "llm": {"provider": provider, "model": model},
+                                "bc": {"id": bc.id, "name": bc.name},
+                                "aggregate": {"id": agg.id, "name": agg.name},
+                                "prompt_len": len(prompt),
+                                "prompt_sha256": sha256_text(prompt),
+                                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                                "system_sha256": sha256_text(SYSTEM_PROMPT),
+                            },
+                            max_inline_chars=1800,
+                        )
+
+                    t_llm0 = time.perf_counter()
+                    evt_response = structured_llm.invoke(
+                        [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
+                    )
+                    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
                     events = evt_response.events
+
+                    if AI_AUDIT_LOG_ENABLED:
+                        try:
+                            resp_dump = (
+                                evt_response.model_dump()
+                                if hasattr(evt_response, "model_dump")
+                                else evt_response.dict()
+                            )
+                        except Exception:
+                            resp_dump = {"__type__": type(evt_response).__name__, "__repr__": repr(evt_response)[:1000]}
+                        SmartLogger.log(
+                            "INFO",
+                            "Ingestion: extract events - LLM invoke completed.",
+                            category="ingestion.llm.extract_events.done",
+                            params={
+                                "session_id": session.id,
+                                "llm": {"provider": provider, "model": model},
+                                "bc": {"id": bc.id, "name": bc.name},
+                                "aggregate": {"id": agg.id, "name": agg.name},
+                                "llm_ms": llm_ms,
+                                "result": {
+                                    "events_count": len(events),
+                                    "event_ids": summarize_for_log([getattr(e, "id", None) for e in events]),
+                                    "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                                },
+                            },
+                            max_inline_chars=1800,
+                        )
                 except Exception as e:
                     SmartLogger.log(
                         "WARNING",
@@ -683,11 +926,58 @@ async def run_ingestion_workflow(
         structured_llm = llm.with_structured_output(PolicyList)
         
         try:
-            pol_response = structured_llm.invoke([
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=prompt)
-            ])
+            provider = os.getenv("LLM_PROVIDER", "openai")
+            model = os.getenv("LLM_MODEL", "gpt-4o")
+            if AI_AUDIT_LOG_ENABLED:
+                SmartLogger.log(
+                    "INFO",
+                    "Ingestion: identify policies - LLM invoke starting.",
+                    category="ingestion.llm.identify_policies.start",
+                    params={
+                        "session_id": session.id,
+                        "llm": {"provider": provider, "model": model},
+                        "bounded_contexts_count": len(bc_candidates),
+                        "events_count": len(all_events_list),
+                        "prompt_len": len(prompt),
+                        "prompt_sha256": sha256_text(prompt),
+                        "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                        "system_sha256": sha256_text(SYSTEM_PROMPT),
+                    },
+                    max_inline_chars=1800,
+                )
+
+            t_llm0 = time.perf_counter()
+            pol_response = structured_llm.invoke(
+                [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)]
+            )
+            llm_ms = int((time.perf_counter() - t_llm0) * 1000)
             policies = pol_response.policies
+
+            if AI_AUDIT_LOG_ENABLED:
+                try:
+                    resp_dump = (
+                        pol_response.model_dump()
+                        if hasattr(pol_response, "model_dump")
+                        else pol_response.dict()
+                    )
+                except Exception:
+                    resp_dump = {"__type__": type(pol_response).__name__, "__repr__": repr(pol_response)[:1000]}
+                SmartLogger.log(
+                    "INFO",
+                    "Ingestion: identify policies - LLM invoke completed.",
+                    category="ingestion.llm.identify_policies.done",
+                    params={
+                        "session_id": session.id,
+                        "llm": {"provider": provider, "model": model},
+                        "llm_ms": llm_ms,
+                        "result": {
+                            "policies_count": len(policies),
+                            "policy_ids": summarize_for_log([getattr(p, "id", None) for p in policies]),
+                            "response": resp_dump if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(resp_dump),
+                        },
+                    },
+                    max_inline_chars=1800,
+                )
         except Exception as e:
             SmartLogger.log(
                 "WARNING",

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, List, Dict
 
 from dotenv import load_dotenv
@@ -42,6 +43,9 @@ from agent.state import (
     WorkflowPhase,
     format_user_story,
 )
+
+from api.smart_logger import SmartLogger
+from api.request_logging import summarize_for_log, sha256_text
 
 
 # Wrapper models for structured output
@@ -80,6 +84,37 @@ class PolicyList(BaseModel):
     )
 
 load_dotenv()
+
+
+# =============================================================================
+# LLM Audit Logging (prompt/output + performance)
+# =============================================================================
+
+
+def _env_flag(key: str, default: bool = False) -> bool:
+    val = (os.getenv(key) or "").strip().lower()
+    if not val:
+        return default
+    return val in {"1", "true", "yes", "y", "on"}
+
+
+AI_AUDIT_LOG_ENABLED = _env_flag("AI_AUDIT_LOG_ENABLED", True)
+AI_AUDIT_LOG_FULL_PROMPT = _env_flag("AI_AUDIT_LOG_FULL_PROMPT", False)
+AI_AUDIT_LOG_FULL_OUTPUT = _env_flag("AI_AUDIT_LOG_FULL_OUTPUT", False)
+
+
+def _dump_model(obj: Any) -> Any:
+    try:
+        if hasattr(obj, "model_dump"):
+            return obj.model_dump()
+    except Exception:
+        pass
+    try:
+        if hasattr(obj, "dict"):
+            return obj.dict()
+    except Exception:
+        pass
+    return {"__type__": type(obj).__name__, "__repr__": repr(obj)[:1000]}
 
 
 def get_llm():
@@ -170,7 +205,50 @@ def identify_bc_node(state: EventStormingState) -> Dict[str, Any]:
     # Use structured output for BC candidates
     structured_llm = llm.with_structured_output(BoundedContextList)
 
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: identify BCs - LLM invoke starting.",
+            category="agent.nodes.identify_bc.llm.start",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "user_stories_count": len(state.user_stories or []),
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_len": len(SYSTEM_PROMPT),
+                "system_sha256": sha256_text(SYSTEM_PROMPT),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
     response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    if AI_AUDIT_LOG_ENABLED:
+        bcs = getattr(response, "bounded_contexts", []) or []
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: identify BCs - LLM invoke completed.",
+            category="agent.nodes.identify_bc.llm.done",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "result": {
+                    "bounded_contexts_count": len(bcs),
+                    "bounded_contexts": summarize_for_log(
+                        [{"id": getattr(bc, "id", None), "name": getattr(bc, "name", None)} for bc in bcs]
+                    ),
+                    "response": (
+                        _dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(_dump_model(response))
+                    ),
+                },
+            },
+            max_inline_chars=1800,
+        )
 
     # Parse response into BC candidates
     bc_candidates = response.bounded_contexts
@@ -260,7 +338,45 @@ def breakdown_user_story_node(state: EventStormingState) -> Dict[str, Any]:
 
         structured_llm = llm.with_structured_output(UserStoryBreakdown)
 
+        provider = os.getenv("LLM_PROVIDER", "openai")
+        model = os.getenv("LLM_MODEL", "gpt-4o")
+        if AI_AUDIT_LOG_ENABLED:
+            SmartLogger.log(
+                "INFO",
+                "EventStorming: breakdown user story - LLM invoke starting.",
+                category="agent.nodes.breakdown_user_story.llm.start",
+                params={
+                    "llm": {"provider": provider, "model": model},
+                    "bc": {"id": current_bc.id, "name": current_bc.name},
+                    "user_story_id": us.get("id"),
+                    "prompt_len": len(prompt),
+                    "prompt_sha256": sha256_text(prompt),
+                    "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                    "system_sha256": sha256_text(SYSTEM_PROMPT),
+                },
+                max_inline_chars=1800,
+            )
+
+        t_llm0 = time.perf_counter()
         response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+        llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+        if AI_AUDIT_LOG_ENABLED:
+            SmartLogger.log(
+                "INFO",
+                "EventStorming: breakdown user story - LLM invoke completed.",
+                category="agent.nodes.breakdown_user_story.llm.done",
+                params={
+                    "llm": {"provider": provider, "model": model},
+                    "bc": {"id": current_bc.id, "name": current_bc.name},
+                    "user_story_id": us.get("id"),
+                    "llm_ms": llm_ms,
+                    "response": (
+                        _dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(_dump_model(response))
+                    ),
+                },
+                max_inline_chars=1800,
+            )
         # Ensure correct ID
         response.user_story_id = us["id"]
         breakdowns.append(response)
@@ -322,7 +438,50 @@ def extract_aggregates_node(state: EventStormingState) -> Dict[str, Any]:
 
     structured_llm = llm.with_structured_output(AggregateList)
 
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: extract aggregates - LLM invoke starting.",
+            category="agent.nodes.extract_aggregates.llm.start",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "bc": {"id": current_bc.id, "name": current_bc.name},
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_sha256": sha256_text(SYSTEM_PROMPT),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
     response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    if AI_AUDIT_LOG_ENABLED:
+        aggs = getattr(response, "aggregates", []) or []
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: extract aggregates - LLM invoke completed.",
+            category="agent.nodes.extract_aggregates.llm.done",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "bc": {"id": current_bc.id, "name": current_bc.name},
+                "llm_ms": llm_ms,
+                "result": {
+                    "aggregates_count": len(aggs),
+                    "aggregates": summarize_for_log(
+                        [{"id": getattr(a, "id", None), "name": getattr(a, "name", None)} for a in aggs]
+                    ),
+                    "response": (
+                        _dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(_dump_model(response))
+                    ),
+                },
+            },
+            max_inline_chars=1800,
+        )
     aggregates = response.aggregates
 
     # Store aggregates for this BC
@@ -423,7 +582,54 @@ def extract_commands_node(state: EventStormingState) -> Dict[str, Any]:
 
             structured_llm = llm.with_structured_output(CommandList)
 
+            provider = os.getenv("LLM_PROVIDER", "openai")
+            model = os.getenv("LLM_MODEL", "gpt-4o")
+            if AI_AUDIT_LOG_ENABLED:
+                SmartLogger.log(
+                    "INFO",
+                    "EventStorming: extract commands - LLM invoke starting.",
+                    category="agent.nodes.extract_commands.llm.start",
+                    params={
+                        "llm": {"provider": provider, "model": model},
+                        "bc": {"id": bc.id, "name": bc.name},
+                        "aggregate": {"id": agg.id, "name": agg.name},
+                        "prompt_len": len(prompt),
+                        "prompt_sha256": sha256_text(prompt),
+                        "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                        "system_sha256": sha256_text(SYSTEM_PROMPT),
+                    },
+                    max_inline_chars=1800,
+                )
+
+            t_llm0 = time.perf_counter()
             response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+            llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+            if AI_AUDIT_LOG_ENABLED:
+                cmds = getattr(response, "commands", []) or []
+                SmartLogger.log(
+                    "INFO",
+                    "EventStorming: extract commands - LLM invoke completed.",
+                    category="agent.nodes.extract_commands.llm.done",
+                    params={
+                        "llm": {"provider": provider, "model": model},
+                        "bc": {"id": bc.id, "name": bc.name},
+                        "aggregate": {"id": agg.id, "name": agg.name},
+                        "llm_ms": llm_ms,
+                        "result": {
+                            "commands_count": len(cmds),
+                            "commands": summarize_for_log(
+                                [{"id": getattr(c, "id", None), "name": getattr(c, "name", None)} for c in cmds]
+                            ),
+                            "response": (
+                                _dump_model(response)
+                                if AI_AUDIT_LOG_FULL_OUTPUT
+                                else summarize_for_log(_dump_model(response))
+                            ),
+                        },
+                    },
+                    max_inline_chars=1800,
+                )
             command_candidates[agg.id] = response.commands
 
     return {
@@ -477,7 +683,52 @@ def extract_events_node(state: EventStormingState) -> Dict[str, Any]:
 
         structured_llm = llm.with_structured_output(EventList)
 
+        provider = os.getenv("LLM_PROVIDER", "openai")
+        model = os.getenv("LLM_MODEL", "gpt-4o")
+        if AI_AUDIT_LOG_ENABLED:
+            SmartLogger.log(
+                "INFO",
+                "EventStorming: extract events - LLM invoke starting.",
+                category="agent.nodes.extract_events.llm.start",
+                params={
+                    "llm": {"provider": provider, "model": model},
+                    "aggregate": {"id": agg_id, "name": agg_name},
+                    "bc": {"name": bc_name, "short": bc_short},
+                    "prompt_len": len(prompt),
+                    "prompt_sha256": sha256_text(prompt),
+                    "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                    "system_sha256": sha256_text(SYSTEM_PROMPT),
+                },
+                max_inline_chars=1800,
+            )
+
+        t_llm0 = time.perf_counter()
         response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+        llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+        if AI_AUDIT_LOG_ENABLED:
+            evts = getattr(response, "events", []) or []
+            SmartLogger.log(
+                "INFO",
+                "EventStorming: extract events - LLM invoke completed.",
+                category="agent.nodes.extract_events.llm.done",
+                params={
+                    "llm": {"provider": provider, "model": model},
+                    "aggregate": {"id": agg_id, "name": agg_name},
+                    "bc": {"name": bc_name, "short": bc_short},
+                    "llm_ms": llm_ms,
+                    "result": {
+                        "events_count": len(evts),
+                        "events": summarize_for_log(
+                            [{"id": getattr(e, "id", None), "name": getattr(e, "name", None)} for e in evts]
+                        ),
+                        "response": (
+                            _dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(_dump_model(response))
+                        ),
+                    },
+                },
+                max_inline_chars=1800,
+            )
         event_candidates[agg_id] = response.events
 
     return {
@@ -552,7 +803,50 @@ def identify_policies_node(state: EventStormingState) -> Dict[str, Any]:
 
     structured_llm = llm.with_structured_output(PolicyList)
 
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-4o")
+    if AI_AUDIT_LOG_ENABLED:
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: identify policies - LLM invoke starting.",
+            category="agent.nodes.identify_policies.llm.start",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "bounded_contexts_count": len(state.approved_bcs or []),
+                "events_count": len(all_events),
+                "prompt_len": len(prompt),
+                "prompt_sha256": sha256_text(prompt),
+                "prompt": prompt if AI_AUDIT_LOG_FULL_PROMPT else summarize_for_log(prompt),
+                "system_sha256": sha256_text(SYSTEM_PROMPT),
+            },
+            max_inline_chars=1800,
+        )
+
+    t_llm0 = time.perf_counter()
     response = structured_llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    llm_ms = int((time.perf_counter() - t_llm0) * 1000)
+
+    if AI_AUDIT_LOG_ENABLED:
+        policies = getattr(response, "policies", []) or []
+        SmartLogger.log(
+            "INFO",
+            "EventStorming: identify policies - LLM invoke completed.",
+            category="agent.nodes.identify_policies.llm.done",
+            params={
+                "llm": {"provider": provider, "model": model},
+                "llm_ms": llm_ms,
+                "result": {
+                    "policies_count": len(policies),
+                    "policies": summarize_for_log(
+                        [{"name": getattr(p, "name", None), "target_bc": getattr(p, "target_bc", None)} for p in policies]
+                    ),
+                    "response": (
+                        _dump_model(response) if AI_AUDIT_LOG_FULL_OUTPUT else summarize_for_log(_dump_model(response))
+                    ),
+                },
+            },
+            max_inline_chars=1800,
+        )
     policies = response.policies
 
     return {

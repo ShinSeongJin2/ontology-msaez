@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
@@ -13,10 +13,21 @@ import PolicyNode from './nodes/PolicyNode.vue'
 import AggregateNode from './nodes/AggregateNode.vue'
 import BoundedContextNode from './nodes/BoundedContextNode.vue'
 
+// Chat Panel
+import ChatPanel from './ChatPanel.vue'
+
 const canvasStore = useCanvasStore()
 const isDragOver = ref(false)
+const isChatPanelOpen = ref(true)
 
 const { fitView, zoomIn, zoomOut } = useVueFlow()
+
+const nodesWithSelection = computed(() => {
+  return canvasStore.nodes.map(node => ({
+    ...node,
+    class: canvasStore.isSelected(node.id) ? 'es-node--selected' : ''
+  }))
+})
 
 // Node types mapping
 const nodeTypes = {
@@ -94,119 +105,157 @@ function onNodesChange(changes) {
     }
   })
 }
+
+function onNodeClick(event) {
+  const nodeId = event.node.id
+
+  // Don't select BC containers
+  if (event.node.type === 'boundedcontext') {
+    return
+  }
+
+  // Multi select
+  if (event.event.ctrlKey || event.event.metaKey) {
+    canvasStore.toggleNodeSelection(nodeId)
+  } else if (event.event.shiftKey) {
+    canvasStore.addToSelection(nodeId)
+  } else {
+    canvasStore.selectNode(nodeId)
+  }
+}
+
+function onPaneClick() {
+  canvasStore.clearSelection()
+}
+
+function toggleChatPanel() {
+  isChatPanelOpen.value = !isChatPanelOpen.value
+}
 </script>
 
 <template>
-  <div 
-    class="right-panel"
-    :class="{ 'drop-zone-active': isDragOver }"
-    @drop="handleDrop"
-    @dragover="handleDragOver"
-    @dragleave="handleDragLeave"
-  >
-    <div class="canvas-container">
-      <!-- Empty State -->
-      <div v-if="canvasStore.nodes.length === 0" class="canvas-empty">
-        <div class="canvas-empty__icon">📋</div>
-        <div class="canvas-empty__text">Canvas is empty</div>
-        <div class="canvas-empty__hint">
-          Drag items from the navigator or double-click to add
+  <div class="right-panel-container">
+    <div 
+      class="right-panel"
+      :class="{ 'drop-zone-active': isDragOver }"
+      @drop="handleDrop"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+    >
+      <div class="canvas-container">
+        <div v-if="canvasStore.nodes.length === 0" class="canvas-empty">
+          <div class="canvas-empty__icon">📋</div>
+          <div class="canvas-empty__text">Canvas is empty</div>
+          <div class="canvas-empty__hint">
+            Drag items from the navigator or double-click to add
+          </div>
         </div>
+
+        <VueFlow
+          v-else
+          :nodes="nodesWithSelection"
+          :edges="canvasStore.edges"
+          :node-types="nodeTypes"
+          :default-viewport="{ zoom: 0.8, x: 50, y: 50 }"
+          :min-zoom="0.2"
+          :max-zoom="2"
+          :snap-to-grid="true"
+          :snap-grid="[10, 10]"
+          :nodes-draggable="true"
+          :nodes-connectable="false"
+          :pan-on-drag="true"
+          :zoom-on-scroll="true"
+          :prevent-scrolling="true"
+          fit-view-on-init
+          @nodes-change="onNodesChange"
+          @node-click="onNodeClick"
+          @pane-click="onPaneClick"
+        >
+          <Background pattern-color="#2a2a3a" :gap="20" />
+          <Controls position="bottom-left" />
+          <MiniMap 
+            :node-color="getNodeColor"
+            :node-stroke-width="3"
+            pannable
+            zoomable
+          />
+        </VueFlow>
       </div>
-      
-      <!-- Vue Flow Canvas -->
-      <VueFlow
-        v-else
-        :nodes="canvasStore.nodes"
-        :edges="canvasStore.edges"
-        :node-types="nodeTypes"
-        :default-viewport="{ zoom: 0.8, x: 50, y: 50 }"
-        :min-zoom="0.2"
-        :max-zoom="2"
-        :snap-to-grid="true"
-        :snap-grid="[10, 10]"
-        :nodes-draggable="true"
-        :nodes-connectable="false"
-        :pan-on-drag="true"
-        :zoom-on-scroll="true"
-        :prevent-scrolling="true"
-        fit-view-on-init
-        @nodes-change="onNodesChange"
-      >
-        <Background pattern-color="#2a2a3a" :gap="20" />
-        <Controls position="bottom-left" />
-        <MiniMap 
-          :node-color="getNodeColor"
-          :node-stroke-width="3"
-          pannable
-          zoomable
-        />
-      </VueFlow>
+
+      <div v-if="canvasStore.selectedNodes.length > 0" class="selection-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 11 12 14 22 4"></polyline>
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+        </svg>
+        <span>{{ canvasStore.selectedNodes.length }} selected</span>
+        <button class="selection-badge__clear" @click="canvasStore.clearSelection()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div v-if="canvasStore.nodes.length > 0" class="canvas-toolbar">
+        <button class="canvas-toolbar__btn" @click="zoomIn()" title="Zoom In">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            <line x1="11" y1="8" x2="11" y2="14"></line>
+            <line x1="8" y1="11" x2="14" y2="11"></line>
+          </svg>
+        </button>
+
+        <button class="canvas-toolbar__btn" @click="zoomOut()" title="Zoom Out">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            <line x1="8" y1="11" x2="14" y2="11"></line>
+          </svg>
+        </button>
+
+        <button class="canvas-toolbar__btn" @click="fitView({ padding: 0.3 })" title="Fit View">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+          </svg>
+        </button>
+
+        <div class="canvas-toolbar__divider"></div>
+
+        <button class="canvas-toolbar__btn" @click="canvasStore.findAndAddRelations()" title="Find Relations">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+          </svg>
+        </button>
+
+        <button class="canvas-toolbar__btn" @click="canvasStore.clearCanvas()" title="Clear Canvas">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+
+        <div class="canvas-toolbar__divider"></div>
+
+        <button 
+          class="canvas-toolbar__btn"
+          :class="{ 'is-active': isChatPanelOpen }"
+          @click="toggleChatPanel"
+          title="Toggle Model Modifier"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </button>
+      </div>
     </div>
-    
-    <!-- Canvas Toolbar -->
-    <div v-if="canvasStore.nodes.length > 0" class="canvas-toolbar">
-      <button 
-        class="canvas-toolbar__btn"
-        @click="zoomIn()"
-        title="Zoom In"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          <line x1="11" y1="8" x2="11" y2="14"></line>
-          <line x1="8" y1="11" x2="14" y2="11"></line>
-        </svg>
-      </button>
-      
-      <button 
-        class="canvas-toolbar__btn"
-        @click="zoomOut()"
-        title="Zoom Out"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-          <line x1="8" y1="11" x2="14" y2="11"></line>
-        </svg>
-      </button>
-      
-      <button 
-        class="canvas-toolbar__btn"
-        @click="fitView({ padding: 0.3 })"
-        title="Fit View"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
-        </svg>
-      </button>
-      
-      <div class="canvas-toolbar__divider"></div>
-      
-      <button 
-        class="canvas-toolbar__btn"
-        @click="canvasStore.findAndAddRelations()"
-        title="Find Relations"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="18" cy="5" r="3"></circle>
-          <circle cx="6" cy="12" r="3"></circle>
-          <circle cx="18" cy="19" r="3"></circle>
-          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-        </svg>
-      </button>
-      
-      <button 
-        class="canvas-toolbar__btn"
-        @click="canvasStore.clearCanvas()"
-        title="Clear Canvas"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="3 6 5 6 21 6"></polyline>
-          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-        </svg>
-      </button>
+
+    <div v-if="isChatPanelOpen" class="chat-panel-wrapper">
+      <ChatPanel />
     </div>
   </div>
 </template>
@@ -216,6 +265,13 @@ function onNodesChange(changes) {
 @import '@vue-flow/core/dist/theme-default.css';
 @import '@vue-flow/controls/dist/style.css';
 @import '@vue-flow/minimap/dist/style.css';
+
+/* Container for canvas + chat */
+.right-panel-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
 
 /* Vue Flow custom background */
 .vue-flow {
@@ -237,6 +293,13 @@ function onNodesChange(changes) {
 
 .vue-flow__node-boundedcontext {
   z-index: 0 !important;
+}
+
+/* Selected node styling */
+.vue-flow__node.es-node--selected {
+  outline: 3px solid var(--color-accent) !important;
+  outline-offset: 3px !important;
+  box-shadow: 0 0 20px rgba(34, 139, 230, 0.4) !important;
 }
 
 /* Vue Flow Minimap custom styles */
@@ -275,5 +338,74 @@ function onNodesChange(changes) {
 
 .vue-flow__edge-text {
   fill: #c1c2c5 !important;
+}
+
+/* Selection Badge */
+.selection-badge {
+  position: absolute;
+  top: var(--spacing-md);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  background: var(--color-accent);
+  color: white;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.selection-badge__clear {
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: white;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.selection-badge__clear:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Chat Panel Wrapper */
+.chat-panel-wrapper {
+  flex-shrink: 0;
+  width: 360px;
+  height: 100%;
+  overflow: hidden;
+  animation: slideIn 0.2s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 </style>

@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import { useCanvasStore } from '../../stores/canvas'
+import { useTerminologyStore } from '../../stores/terminology'
 
 const props = defineProps({
   id: String,
@@ -9,7 +10,9 @@ const props = defineProps({
 })
 
 const canvasStore = useCanvasStore()
+const terminologyStore = useTerminologyStore()
 const isExpanding = ref(false)
+const headerText = computed(() => `<< ${terminologyStore.getTerm('Event')} >>`)
 
 // Double-click to expand triggered policies
 async function handleDoubleClick() {
@@ -34,7 +37,7 @@ async function handleDoubleClick() {
     @dblclick="handleDoubleClick"
   >
     <div class="es-node__header">
-      &lt;&lt; Event &gt;&gt;
+      {{ headerText }}
     </div>
     <div class="es-node__body">
       <div class="es-node__name">{{ data.name }}</div>

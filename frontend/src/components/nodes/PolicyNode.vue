@@ -1,16 +1,21 @@
 <script setup>
+import { computed } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
+import { useTerminologyStore } from '../../stores/terminology'
 
 const props = defineProps({
   id: String,
   data: Object
 })
+
+const terminologyStore = useTerminologyStore()
+const headerText = computed(() => `<< ${terminologyStore.getTerm('Policy')} >>`)
 </script>
 
 <template>
   <div class="es-node es-node--policy">
     <div class="es-node__header">
-      &lt;&lt; Policy &gt;&gt;
+      {{ headerText }}
     </div>
     <div class="es-node__body">
       <div class="es-node__name">{{ data.name }}</div>

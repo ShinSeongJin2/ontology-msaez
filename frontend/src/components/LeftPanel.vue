@@ -1,9 +1,11 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
 import { useNavigatorStore } from '../stores/navigator'
+import { useTerminologyStore } from '../stores/terminology'
 import TreeNode from './TreeNode.vue'
 
 const navigatorStore = useNavigatorStore()
+const terminologyStore = useTerminologyStore()
 const isLoading = ref(true)
 
 onMounted(async () => {
@@ -45,7 +47,7 @@ watch(() => navigatorStore.loading, (newVal) => {
   <aside class="left-panel">
     <div class="panel-header">
       <div style="display: flex; align-items: center; justify-content: space-between;">
-        <span class="panel-title">Bounded Contexts</span>
+        <span class="panel-title">{{ terminologyStore.getTerm('BoundedContext') }}s</span>
         <div style="display: flex; gap: 4px;">
           <button 
             class="tree-action-btn"
@@ -115,7 +117,7 @@ watch(() => navigatorStore.loading, (newVal) => {
         <!-- Bounded Contexts -->
         <div v-if="navigatorStore.contexts.length > 0" class="section-group">
           <div class="section-header">
-            <span class="section-title">Bounded Contexts</span>
+            <span class="section-title">{{ terminologyStore.getTerm('BoundedContext') }}s</span>
             <span class="section-count">{{ navigatorStore.contexts.length }}</span>
           </div>
           <TransitionGroup name="tree-item">
@@ -138,19 +140,19 @@ watch(() => navigatorStore.loading, (newVal) => {
       </div>
       <div class="legend-item">
         <span class="legend-color legend-color--aggregate"></span>
-        <span>Aggregate</span>
+        <span>{{ terminologyStore.getTerm('Aggregate') }}</span>
       </div>
       <div class="legend-item">
         <span class="legend-color legend-color--command"></span>
-        <span>Command</span>
+        <span>{{ terminologyStore.getTerm('Command') }}</span>
       </div>
       <div class="legend-item">
         <span class="legend-color legend-color--event"></span>
-        <span>Event</span>
+        <span>{{ terminologyStore.getTerm('Event') }}</span>
       </div>
       <div class="legend-item">
         <span class="legend-color legend-color--policy"></span>
-        <span>Policy</span>
+        <span>{{ terminologyStore.getTerm('Policy') }}</span>
       </div>
     </div>
   </aside>

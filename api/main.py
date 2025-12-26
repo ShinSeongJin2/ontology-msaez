@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -49,7 +50,14 @@ async def lifespan(app: FastAPI):
             "logger_impl": getattr(SmartLogger, "impl_source", "unknown"),
         },
     )
+    t0 = time.perf_counter()
     driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    SmartLogger.log(
+        "INFO",
+        "Neo4j driver created.",
+        category="api.lifespan.neo4j_driver",
+        params={"neo4j_uri": NEO4J_URI, "duration_ms": int((time.perf_counter() - t0) * 1000)},
+    )
     yield
     if driver:
         driver.close()
@@ -132,6 +140,18 @@ app.include_router(ingestion_router)
 # Include change management router
 from api.change import router as change_router
 app.include_router(change_router)
+
+# Include chat-based model modification router
+from api.chat import router as chat_router
+app.include_router(chat_router)
+
+# Include PRD generator router
+from api.prd_generator import router as prd_router
+app.include_router(prd_router)
+
+# Include user story add/apply router
+from api.user_story import router as user_story_router
+app.include_router(user_story_router)
 
 
 def get_session():

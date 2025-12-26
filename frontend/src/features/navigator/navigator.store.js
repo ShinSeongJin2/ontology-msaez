@@ -1,7 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { createLogger, newOpId } from '@/app/logging/logger'
 
 export const useNavigatorStore = defineStore('navigator', () => {
+  const log = createLogger({ scope: 'NavigatorStore' })
   const contexts = ref([])
   const contextTrees = ref({})
   const userStories = ref([])  // Unassigned user stories at root level
@@ -24,7 +26,11 @@ export const useNavigatorStore = defineStore('navigator', () => {
       if (!response.ok) throw new Error('Failed to fetch user stories')
       userStories.value = await response.json()
     } catch (e) {
-      console.error('Error fetching user stories:', e)
+      log.error(
+        'navigator_fetch_user_stories_failed',
+        'Failed to fetch unassigned user stories; Navigator root list may be stale.',
+        { errorMessage: e?.message || String(e) }
+      )
     }
   }
   
@@ -39,7 +45,11 @@ export const useNavigatorStore = defineStore('navigator', () => {
       contexts.value = await response.json()
     } catch (e) {
       error.value = e.message
-      console.error('Error fetching contexts:', e)
+      log.error(
+        'navigator_fetch_contexts_failed',
+        'Failed to fetch bounded contexts; Navigator may be incomplete.',
+        { errorMessage: e?.message || String(e) }
+      )
     } finally {
       loading.value = false
     }
@@ -58,7 +68,11 @@ export const useNavigatorStore = defineStore('navigator', () => {
       contextTrees.value[contextId] = tree
       return tree
     } catch (e) {
-      console.error('Error fetching context tree:', e)
+      log.error(
+        'navigator_fetch_context_tree_failed',
+        'Failed to fetch context tree; this bounded context may appear empty until retry.',
+        { contextId, forceRefresh, errorMessage: e?.message || String(e) }
+      )
       return null
     }
   }
@@ -319,35 +333,130 @@ export const useNavigatorStore = defineStore('navigator', () => {
   }
   
   // Refresh all contexts and trees
-  async function refreshAll() {
+  async function refreshAll(meta = {}) {
+    const opId = meta.opId || newOpId('nav_refresh')
+    const trigger = meta.trigger || 'unknown'
+    const userStoryId = meta.userStoryId || null
+
+    const t0 = (globalThis.performance && performance.now) ? performance.now() : Date.now()
+    log.info(
+      'navigator_refresh_started',
+      'Starting Navigator refresh: will reload unassigned user stories, contexts, and per-context trees.',
+      {
+        opId,
+        trigger,
+        userStoryId,
+        before: {
+          contextsCount: contexts.value.length,
+          unassignedUserStoriesCount: userStories.value.length,
+          contextTreesCount: Object.keys(contextTrees.value).length,
+          loading: !!loading.value,
+          error: error.value
+        }
+      }
+    )
+
     loading.value = true
     error.value = null
     
     try {
       // Fetch unassigned user stories
+      log.debug(
+        'navigator_refresh_step_start',
+        'Refreshing unassigned user stories.',
+        { opId, step: 'fetchUserStories' }
+      )
       await fetchUserStories()
+      log.info(
+        'navigator_refresh_step_completed',
+        'Unassigned user stories refreshed.',
+        { opId, step: 'fetchUserStories', unassignedUserStoriesCount: userStories.value.length }
+      )
       
       // Fetch contexts
+      log.debug(
+        'navigator_refresh_step_start',
+        'Refreshing bounded contexts list.',
+        { opId, step: 'fetchContexts' }
+      )
       const response = await fetch('/api/contexts')
-      if (!response.ok) throw new Error('Failed to fetch contexts')
+      if (!response.ok) {
+        throw new Error(`Failed to fetch contexts (http ${response.status})`)
+      }
       contexts.value = await response.json()
+      log.info(
+        'navigator_refresh_step_completed',
+        'Bounded contexts refreshed.',
+        { opId, step: 'fetchContexts', contextsCount: contexts.value.length }
+      )
       
       // Clear old trees and fetch new ones
       contextTrees.value = {}
       userStoryAssignments.value = {}
       
+      log.info(
+        'navigator_refresh_tree_reload_started',
+        'Reloading per-context trees (full-tree) after clearing cached trees.',
+        { opId, contextsToFetch: contexts.value.length }
+      )
+
+      let okCount = 0
+      let failCount = 0
       for (const ctx of contexts.value) {
-        await fetchContextTree(ctx.id, true)
+        log.debug(
+          'navigator_refresh_tree_fetch_attempt',
+          'Fetching context tree.',
+          { opId, contextId: ctx.id, contextName: ctx.name }
+        )
+
+        const tree = await fetchContextTree(ctx.id, true)
+        if (tree) okCount += 1
+        else failCount += 1
       }
+
+      log.info(
+        'navigator_refresh_tree_reload_completed',
+        'Per-context tree reload finished.',
+        { opId, okCount, failCount, contextTreesCount: Object.keys(contextTrees.value).length }
+      )
       
       // Auto-expand all for better visibility
       expandAll()
+      log.debug(
+        'navigator_refresh_expand_all_completed',
+        'Auto-expanded Navigator nodes for visibility.',
+        { opId, expandedNodesCount: expandedNodes.value?.size ?? 0 }
+      )
       
     } catch (e) {
       error.value = e.message
-      console.error('Error refreshing:', e)
+      const durationMs = Math.round(((globalThis.performance && performance.now) ? performance.now() : Date.now()) - t0)
+      log.error(
+        'navigator_refresh_failed',
+        'Navigator refresh failed; UI may be partially updated.',
+        { opId, trigger, userStoryId, durationMs, errorMessage: e?.message || String(e) }
+      )
     } finally {
       loading.value = false
+      const durationMs = Math.round(((globalThis.performance && performance.now) ? performance.now() : Date.now()) - t0)
+      if (!error.value) {
+        log.info(
+          'navigator_refresh_completed',
+          'Navigator refresh completed successfully.',
+          {
+            opId,
+            trigger,
+            userStoryId,
+            durationMs,
+            after: {
+              contextsCount: contexts.value.length,
+              unassignedUserStoriesCount: userStories.value.length,
+              contextTreesCount: Object.keys(contextTrees.value).length,
+              expandedNodesCount: expandedNodes.value?.size ?? 0
+            }
+          }
+        )
+      }
     }
   }
   

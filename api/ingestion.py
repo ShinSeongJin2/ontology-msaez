@@ -19,10 +19,12 @@ from enum import Enum
 from typing import Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from starlette.requests import Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from api.smart_logger import SmartLogger
+from api.request_logging import http_context, summarize_for_log, sha256_bytes, sha256_text
 
 # Add parent directory to path for agent imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -797,8 +799,9 @@ async def run_ingestion_workflow(
 
 @router.post("/upload")
 async def upload_document(
+    request: Request,
     file: Optional[UploadFile] = File(None),
-    text: Optional[str] = Form(None)
+    text: Optional[str] = Form(None),
 ) -> dict[str, Any]:
     """
     Upload a requirements document (text or PDF) to start ingestion.
@@ -810,6 +813,23 @@ async def upload_document(
     if file:
         file_content = await file.read()
         filename = file.filename or ""
+        SmartLogger.log(
+            "INFO",
+            "Ingestion upload received (file): reading file bytes and extracting text.",
+            category="ingestion.api.upload.inputs",
+            params={
+                **http_context(request),
+                "inputs": {
+                    "file": {
+                        "filename": filename,
+                        "content_type": getattr(file, "content_type", None),
+                        "bytes": len(file_content),
+                        "sha256": sha256_bytes(file_content),
+                    },
+                    "text_form_provided": bool(text),
+                },
+            },
+        )
         SmartLogger.log(
             "INFO",
             "Upload received (file)",
@@ -829,21 +849,60 @@ async def upload_document(
         content = text
         SmartLogger.log(
             "INFO",
+            "Ingestion upload received (text): starting ingestion session from raw text.",
+            category="ingestion.api.upload.inputs",
+            params={
+                **http_context(request),
+                "inputs": {
+                    "text": summarize_for_log(text),
+                    "text_sha256": sha256_text(text),
+                },
+            },
+        )
+        SmartLogger.log(
+            "INFO",
             "Upload received (text)",
             category="ingestion.api.upload",
             params={"chars": len(content)},
         )
     else:
+        SmartLogger.log(
+            "WARNING",
+            "Ingestion upload rejected: neither 'file' nor 'text' was provided.",
+            category="ingestion.api.upload.invalid",
+            params=http_context(request),
+        )
         raise HTTPException(
             status_code=400,
             detail="Either 'file' or 'text' must be provided"
         )
     
     if not content.strip():
+        SmartLogger.log(
+            "WARNING",
+            "Ingestion upload rejected: extracted content is empty after parsing.",
+            category="ingestion.api.upload.empty",
+            params={**http_context(request), "content_len": len(content)},
+        )
         raise HTTPException(
             status_code=400,
             detail="Document content is empty"
         )
+
+    # Log reproducible fingerprint of the content without dumping the entire document.
+    SmartLogger.log(
+        "INFO",
+        "Ingestion content prepared: extracted text ready for workflow.",
+        category="ingestion.api.upload.content",
+        params={
+            **http_context(request),
+            "content": {
+                "len": len(content),
+                "sha256": sha256_text(content),
+                "preview": summarize_for_log(content),
+            },
+        },
+    )
     
     # Create session
     session = create_session()
@@ -863,7 +922,7 @@ async def upload_document(
 
 
 @router.get("/stream/{session_id}")
-async def stream_progress(session_id: str):
+async def stream_progress(session_id: str, request: Request):
     """
     SSE endpoint for streaming ingestion progress.
     
@@ -872,11 +931,27 @@ async def stream_progress(session_id: str):
     session = get_session(session_id)
     
     if not session:
-        SmartLogger.log("WARNING", "Ingestion stream requested for missing session", category="ingestion.api.stream", params={"session_id": session_id})
+        SmartLogger.log(
+            "WARNING",
+            "Ingestion stream requested for missing session: client may be using an expired/invalid session_id.",
+            category="ingestion.api.stream.not_found",
+            params={**http_context(request), "inputs": {"session_id": session_id}, "active_sessions": len(_sessions)},
+        )
         raise HTTPException(status_code=404, detail="Session not found")
-    SmartLogger.log("INFO", "Ingestion stream connected", category="ingestion.api.stream", params={"session_id": session_id})
+    SmartLogger.log(
+        "INFO",
+        "Ingestion stream connected: starting SSE progress events for workflow execution.",
+        category="ingestion.api.stream.connected",
+        params={**http_context(request), "inputs": {"session_id": session_id}},
+    )
     
     async def event_generator():
+        SmartLogger.log(
+            "INFO",
+            "Ingestion stream generator started: emitting 'progress' SSE events.",
+            category="ingestion.api.stream.generator_start",
+            params={**http_context(request), "inputs": {"session_id": session_id}},
+        )
         async for event in run_ingestion_workflow(session, session.content):
             add_event(session, event)
             yield {
@@ -887,15 +962,25 @@ async def stream_progress(session_id: str):
         # Clean up session after completion
         if session_id in _sessions:
             del _sessions[session_id]
-        SmartLogger.log("INFO", "Ingestion session cleaned up", category="ingestion.api.stream", params={"session_id": session_id})
+        SmartLogger.log(
+            "INFO",
+            "Ingestion session cleaned up: workflow completed and session removed from memory.",
+            category="ingestion.api.stream.cleaned",
+            params={**http_context(request), "inputs": {"session_id": session_id}},
+        )
     
     return EventSourceResponse(event_generator())
 
 
 @router.get("/sessions")
-async def list_sessions() -> list[dict[str, Any]]:
+async def list_sessions(request: Request) -> list[dict[str, Any]]:
     """List all active ingestion sessions."""
-    SmartLogger.log("INFO", "List ingestion sessions", category="ingestion.api.sessions", params={"active": len(_sessions)})
+    SmartLogger.log(
+        "INFO",
+        "List ingestion sessions: returning in-memory active sessions.",
+        category="ingestion.api.sessions.request",
+        params={**http_context(request), "active": len(_sessions)},
+    )
     return [
         {
             "id": s.id,
@@ -908,7 +993,7 @@ async def list_sessions() -> list[dict[str, Any]]:
 
 
 @router.delete("/clear-all")
-async def clear_all_data() -> dict[str, Any]:
+async def clear_all_data(request: Request) -> dict[str, Any]:
     """
     Clear all nodes and relationships from Neo4j.
     Used before starting a fresh ingestion.
@@ -918,7 +1003,12 @@ async def clear_all_data() -> dict[str, Any]:
     client = get_neo4j_client()
     
     try:
-        SmartLogger.log("WARNING", "Clear-all requested", category="ingestion.api.clear_all")
+        SmartLogger.log(
+            "WARNING",
+            "Clear-all requested: deleting all nodes/relationships from Neo4j (destructive).",
+            category="ingestion.api.clear_all.request",
+            params=http_context(request),
+        )
         with client.session() as session:
             # Get counts before deletion
             count_query = """
@@ -936,7 +1026,12 @@ async def clear_all_data() -> dict[str, Any]:
             DETACH DELETE n
             """
             session.run(delete_query)
-            SmartLogger.log("INFO", "Clear-all completed", category="ingestion.api.clear_all", params={"deleted": before_counts})
+            SmartLogger.log(
+                "INFO",
+                "Clear-all completed: Neo4j graph wiped.",
+                category="ingestion.api.clear_all.done",
+                params={**http_context(request), "deleted": before_counts},
+            )
             
             return {
                 "success": True,
@@ -944,7 +1039,12 @@ async def clear_all_data() -> dict[str, Any]:
                 "deleted": before_counts
             }
     except Exception as e:
-        SmartLogger.log("ERROR", "Clear-all failed", category="ingestion.api.clear_all", params={"error": str(e)})
+        SmartLogger.log(
+            "ERROR",
+            "Clear-all failed: Neo4j delete operation raised an exception.",
+            category="ingestion.api.clear_all.error",
+            params={**http_context(request), "error": {"type": type(e).__name__, "message": str(e)}},
+        )
         return {
             "success": False,
             "message": f"삭제 실패: {str(e)}",
@@ -953,7 +1053,7 @@ async def clear_all_data() -> dict[str, Any]:
 
 
 @router.get("/stats")
-async def get_data_stats() -> dict[str, Any]:
+async def get_data_stats(request: Request) -> dict[str, Any]:
     """
     Get current data statistics from Neo4j.
     """
@@ -962,7 +1062,12 @@ async def get_data_stats() -> dict[str, Any]:
     client = get_neo4j_client()
     
     try:
-        SmartLogger.log("INFO", "Ingestion stats requested", category="ingestion.api.stats")
+        SmartLogger.log(
+            "INFO",
+            "Ingestion stats requested: counting Neo4j nodes by label.",
+            category="ingestion.api.stats.request",
+            params=http_context(request),
+        )
         with client.session() as session:
             query = """
             MATCH (n)
@@ -974,7 +1079,12 @@ async def get_data_stats() -> dict[str, Any]:
             counts = {item["label"]: item["count"] for item in record["counts"]} if record else {}
             
             total = sum(counts.values())
-            SmartLogger.log("INFO", "Ingestion stats returned", category="ingestion.api.stats", params={"total": total, "counts": counts})
+            SmartLogger.log(
+                "INFO",
+                "Ingestion stats returned.",
+                category="ingestion.api.stats.done",
+                params={**http_context(request), "total": total, "counts": counts},
+            )
             
             return {
                 "total": total,
@@ -982,7 +1092,12 @@ async def get_data_stats() -> dict[str, Any]:
                 "hasData": total > 0
             }
     except Exception as e:
-        SmartLogger.log("ERROR", "Ingestion stats failed", category="ingestion.api.stats", params={"error": str(e)})
+        SmartLogger.log(
+            "ERROR",
+            "Ingestion stats failed: Neo4j count query raised an exception.",
+            category="ingestion.api.stats.error",
+            params={**http_context(request), "error": {"type": type(e).__name__, "message": str(e)}},
+        )
         return {
             "total": 0,
             "counts": {},

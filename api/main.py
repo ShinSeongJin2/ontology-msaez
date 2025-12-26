@@ -17,10 +17,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from starlette.requests import Request
+from starlette.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from neo4j import GraphDatabase
 
 from api.smart_logger import SmartLogger
+from api.request_logging import RequestTimer, http_context, new_request_id, set_request_id, summarize_for_log
 
 # Neo4j Configuration
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -69,6 +72,59 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -----------------------------------------------------------------------------
+# Request Correlation + Narrative Logging (LDVC)
+# -----------------------------------------------------------------------------
+
+@app.middleware("http")
+async def _request_id_middleware(request: Request, call_next):
+    """
+    Assign a request_id to every inbound HTTP request and emit start/end logs.
+    This gives us a deterministic "Bridge of Trust" for tracing execution.
+    """
+    rid = request.headers.get("x-request-id") or new_request_id()
+    set_request_id(rid)
+    timer = RequestTimer()
+
+    SmartLogger.log(
+        "INFO",
+        "HTTP request received: starting route execution.",
+        category="api.http.start",
+        params=http_context(request),
+    )
+
+    try:
+        response: Response = await call_next(request)
+        SmartLogger.log(
+            "INFO",
+            "HTTP request completed.",
+            category="api.http.end",
+            params={
+                **http_context(request),
+                "result": {
+                    "status_code": response.status_code,
+                    "duration_ms": timer.ms(),
+                },
+            },
+        )
+        response.headers["X-Request-Id"] = rid
+        return response
+    except Exception as e:
+        SmartLogger.log(
+            "ERROR",
+            "HTTP request failed: route raised an exception.",
+            category="api.http.error",
+            params={
+                **http_context(request),
+                "error": {"type": type(e).__name__, "message": str(e)},
+                "duration_ms": timer.ms(),
+            },
+        )
+        raise
+    finally:
+        # Avoid leaking request_id into unrelated async contexts.
+        set_request_id(None)
+
 # Include ingestion router
 from api.ingestion import router as ingestion_router
 app.include_router(ingestion_router)
@@ -91,21 +147,36 @@ def get_session():
 
 
 @app.get("/api/health")
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint."""
-    SmartLogger.log("INFO", "Health check requested", category="api.health")
+    SmartLogger.log(
+        "INFO",
+        "Health check requested: verifying Neo4j connectivity.",
+        category="api.health.request",
+        params=http_context(request),
+    )
     try:
         with get_session() as session:
             session.run("RETURN 1")
-        SmartLogger.log("INFO", "Health check OK", category="api.health", params={"neo4j": "connected"})
+        SmartLogger.log(
+            "INFO",
+            "Health check OK: Neo4j connection verified.",
+            category="api.health.ok",
+            params={**http_context(request), "neo4j": "connected"},
+        )
         return {"status": "healthy", "neo4j": "connected"}
     except Exception as e:
-        SmartLogger.log("ERROR", "Health check failed", category="api.health", params={"error": str(e)})
+        SmartLogger.log(
+            "ERROR",
+            "Health check failed: Neo4j connection could not be verified.",
+            category="api.health.error",
+            params={**http_context(request), "error": {"type": type(e).__name__, "message": str(e)}},
+        )
         return {"status": "unhealthy", "error": str(e)}
 
 
 @app.delete("/api/graph/clear")
-async def clear_all_nodes():
+async def clear_all_nodes(request: Request):
     """
     DELETE /graph/clear - 모든 노드와 관계 삭제
     새로운 인제스션 전에 기존 데이터를 모두 삭제합니다.
@@ -114,17 +185,25 @@ async def clear_all_nodes():
     MATCH (n)
     DETACH DELETE n
     """
-    SmartLogger.log("WARNING", "Graph clear requested (DETACH DELETE all)", category="api.graph.clear")
+    SmartLogger.log(
+        "WARNING",
+        "Graph clear requested: DETACH DELETE all nodes/relationships (destructive).",
+        category="api.graph.clear.request",
+        params=http_context(request),
+    )
     with get_session() as session:
         result = session.run(query)
         summary = result.consume()
         SmartLogger.log(
             "INFO",
-            "Graph cleared",
-            category="api.graph.clear",
+            "Graph cleared: all nodes/relationships removed.",
+            category="api.graph.clear.done",
             params={
-                "nodes_deleted": summary.counters.nodes_deleted,
-                "relationships_deleted": summary.counters.relationships_deleted,
+                **http_context(request),
+                "deleted": {
+                    "nodes_deleted": summary.counters.nodes_deleted,
+                    "relationships_deleted": summary.counters.relationships_deleted,
+                },
             },
         )
         return {
@@ -135,7 +214,7 @@ async def clear_all_nodes():
 
 
 @app.get("/api/graph/stats")
-async def get_graph_stats():
+async def get_graph_stats(request: Request):
     """
     GET /graph/stats - 그래프 통계 조회
     현재 Neo4j에 저장된 노드 수를 반환합니다.
@@ -145,21 +224,36 @@ async def get_graph_stats():
     WITH labels(n)[0] as label, count(n) as count
     RETURN collect({label: label, count: count}) as stats
     """
-    SmartLogger.log("INFO", "Graph stats requested", category="api.graph.stats")
+    SmartLogger.log(
+        "INFO",
+        "Graph stats requested: counting nodes by label.",
+        category="api.graph.stats.request",
+        params=http_context(request),
+    )
     with get_session() as session:
         result = session.run(query)
         record = result.single()
         if record:
             stats = {item["label"]: item["count"] for item in record["stats"] if item["label"]}
             total = sum(stats.values())
-            SmartLogger.log("INFO", "Graph stats computed", category="api.graph.stats", params={"total": total, "by_type": stats})
+            SmartLogger.log(
+                "INFO",
+                "Graph stats computed: counts by label returned.",
+                category="api.graph.stats.done",
+                params={**http_context(request), "total": total, "by_type": stats},
+            )
             return {"total": total, "by_type": stats}
-        SmartLogger.log("INFO", "Graph stats empty (no nodes)", category="api.graph.stats")
+        SmartLogger.log(
+            "INFO",
+            "Graph stats empty: no nodes found.",
+            category="api.graph.stats.empty",
+            params=http_context(request),
+        )
         return {"total": 0, "by_type": {}}
 
 
 @app.get("/api/user-stories")
-async def get_all_user_stories() -> list[dict[str, Any]]:
+async def get_all_user_stories(request: Request) -> list[dict[str, Any]]:
     """
     GET /user-stories - User Story 목록 조회
     Returns all User Stories with their BC assignments.
@@ -179,16 +273,26 @@ async def get_all_user_stories() -> list[dict[str, Any]]:
     } as user_story
     ORDER BY us.id
     """
-    SmartLogger.log("INFO", "User stories list requested", category="api.user_stories.list")
+    SmartLogger.log(
+        "INFO",
+        "User stories list requested: returning all user stories with BC assignment.",
+        category="api.user_stories.list.request",
+        params=http_context(request),
+    )
     with get_session() as session:
         result = session.run(query)
         items = [dict(record["user_story"]) for record in result]
-        SmartLogger.log("INFO", "User stories list returned", category="api.user_stories.list", params={"count": len(items)})
+        SmartLogger.log(
+            "INFO",
+            "User stories list returned.",
+            category="api.user_stories.list.done",
+            params={**http_context(request), "count": len(items)},
+        )
         return items
 
 
 @app.get("/api/user-stories/unassigned")
-async def get_unassigned_user_stories() -> list[dict[str, Any]]:
+async def get_unassigned_user_stories(request: Request) -> list[dict[str, Any]]:
     """
     GET /user-stories/unassigned - BC에 할당되지 않은 User Story 조회
     """
@@ -205,16 +309,26 @@ async def get_unassigned_user_stories() -> list[dict[str, Any]]:
     } as user_story
     ORDER BY us.id
     """
-    SmartLogger.log("INFO", "Unassigned user stories requested", category="api.user_stories.unassigned")
+    SmartLogger.log(
+        "INFO",
+        "Unassigned user stories requested: finding user stories without BC assignment.",
+        category="api.user_stories.unassigned.request",
+        params=http_context(request),
+    )
     with get_session() as session:
         result = session.run(query)
         items = [dict(record["user_story"]) for record in result]
-        SmartLogger.log("INFO", "Unassigned user stories returned", category="api.user_stories.unassigned", params={"count": len(items)})
+        SmartLogger.log(
+            "INFO",
+            "Unassigned user stories returned.",
+            category="api.user_stories.unassigned.done",
+            params={**http_context(request), "count": len(items)},
+        )
         return items
 
 
 @app.get("/api/contexts")
-async def get_all_contexts() -> list[dict[str, Any]]:
+async def get_all_contexts(request: Request) -> list[dict[str, Any]]:
     """
     GET /contexts - BC 목록 조회
     Returns all Bounded Contexts with basic info.
@@ -234,16 +348,26 @@ async def get_all_contexts() -> list[dict[str, Any]]:
     } as context
     ORDER BY bc.name
     """
-    SmartLogger.log("INFO", "Contexts list requested", category="api.contexts.list")
+    SmartLogger.log(
+        "INFO",
+        "Contexts list requested: returning all bounded contexts with aggregate/user story counts.",
+        category="api.contexts.list.request",
+        params=http_context(request),
+    )
     with get_session() as session:
         result = session.run(query)
         items = [dict(record["context"]) for record in result]
-        SmartLogger.log("INFO", "Contexts list returned", category="api.contexts.list", params={"count": len(items)})
+        SmartLogger.log(
+            "INFO",
+            "Contexts list returned.",
+            category="api.contexts.list.done",
+            params={**http_context(request), "count": len(items)},
+        )
         return items
 
 
 @app.get("/api/contexts/{context_id}/tree")
-async def get_context_tree(context_id: str) -> dict[str, Any]:
+async def get_context_tree(context_id: str, request: Request) -> dict[str, Any]:
     """
     GET /contexts/{id}/tree - BC 하위 트리
     Returns the full tree structure under a Bounded Context.
@@ -299,19 +423,42 @@ async def get_context_tree(context_id: str) -> dict[str, Any]:
         policies: policies
     } as tree
     """
-    SmartLogger.log("INFO", "Context tree requested", category="api.contexts.tree", params={"context_id": context_id})
+    SmartLogger.log(
+        "INFO",
+        "Context tree requested: building BC->Aggregate->Command->Event + Policy tree.",
+        category="api.contexts.tree.request",
+        params={**http_context(request), "inputs": {"context_id": context_id}},
+    )
     with get_session() as session:
         result = session.run(query, context_id=context_id)
         record = result.single()
         if not record:
-            SmartLogger.log("WARNING", "Context tree not found", category="api.contexts.tree", params={"context_id": context_id})
+            SmartLogger.log(
+                "WARNING",
+                "Context tree not found: BC id did not match any node.",
+                category="api.contexts.tree.not_found",
+                params={**http_context(request), "inputs": {"context_id": context_id}},
+            )
             raise HTTPException(status_code=404, detail=f"Context {context_id} not found")
-        SmartLogger.log("INFO", "Context tree returned", category="api.contexts.tree", params={"context_id": context_id})
-        return dict(record["tree"])
+        tree = dict(record["tree"])
+        SmartLogger.log(
+            "INFO",
+            "Context tree returned.",
+            category="api.contexts.tree.done",
+            params={
+                **http_context(request),
+                "inputs": {"context_id": context_id},
+                "summary": {
+                    "aggregates": len(tree.get("aggregates") or []),
+                    "policies": len(tree.get("policies") or []),
+                },
+            },
+        )
+        return tree
 
 
 @app.get("/api/contexts/{context_id}/full-tree")
-async def get_context_full_tree(context_id: str) -> dict[str, Any]:
+async def get_context_full_tree(context_id: str, request: Request) -> dict[str, Any]:
     """
     GET /contexts/{id}/full-tree - BC 하위 전체 트리 (정규화된 구조)
     """
@@ -361,12 +508,21 @@ async def get_context_full_tree(context_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        # BC
-        SmartLogger.log("INFO", "Context full-tree requested", category="api.contexts.full_tree", params={"context_id": context_id})
+        SmartLogger.log(
+            "INFO",
+            "Context full-tree requested: returning normalized structure (BC + user stories + aggregates + policies).",
+            category="api.contexts.full_tree.request",
+            params={**http_context(request), "inputs": {"context_id": context_id}},
+        )
         bc_result = session.run(bc_query, context_id=context_id)
         bc_record = bc_result.single()
         if not bc_record:
-            SmartLogger.log("WARNING", "Context full-tree not found", category="api.contexts.full_tree", params={"context_id": context_id})
+            SmartLogger.log(
+                "WARNING",
+                "Context full-tree not found: BC id did not match any node.",
+                category="api.contexts.full_tree.not_found",
+                params={**http_context(request), "inputs": {"context_id": context_id}},
+            )
             raise HTTPException(status_code=404, detail=f"Context {context_id} not found")
         bc = dict(bc_record["bc"])
         bc["type"] = "BoundedContext"
@@ -430,13 +586,16 @@ async def get_context_full_tree(context_id: str) -> dict[str, Any]:
 
         SmartLogger.log(
             "INFO",
-            "Context full-tree returned",
-            category="api.contexts.full_tree",
+            "Context full-tree returned.",
+            category="api.contexts.full_tree.done",
             params={
-                "context_id": context_id,
-                "userStories": len(user_stories),
-                "aggregates": len(bc["aggregates"]),
-                "policies": len(policies),
+                **http_context(request),
+                "inputs": {"context_id": context_id},
+                "counts": {
+                    "userStories": len(user_stories),
+                    "aggregates": len(bc["aggregates"]),
+                    "policies": len(policies),
+                },
             },
         )
         return bc
@@ -444,6 +603,7 @@ async def get_context_full_tree(context_id: str) -> dict[str, Any]:
 
 @app.get("/api/graph/subgraph")
 async def get_subgraph(
+    request: Request,
     node_ids: list[str] = Query(..., description="List of node IDs to include"),
 ) -> dict[str, Any]:
     """
@@ -487,16 +647,21 @@ async def get_subgraph(
 
     SmartLogger.log(
         "INFO",
-        "Subgraph requested",
-        category="api.graph.subgraph",
-        params={"node_ids_count": len(node_ids), "sample": node_ids[:5]},
+        "Subgraph requested: returning nodes + relationships for given node_ids.",
+        category="api.graph.subgraph.request",
+        params={**http_context(request), "inputs": {"node_ids": summarize_for_log(node_ids)}},
     )
     with get_session() as session:
         result = session.run(query, node_ids=node_ids)
         record = result.single()
         
         if not record:
-            SmartLogger.log("INFO", "Subgraph empty", category="api.graph.subgraph")
+            SmartLogger.log(
+                "INFO",
+                "Subgraph empty: no matching nodes found for provided ids.",
+                category="api.graph.subgraph.empty",
+                params={**http_context(request), "inputs": {"node_ids": summarize_for_log(node_ids)}},
+            )
             return {"nodes": [], "relationships": []}
         
         nodes = record["nodes"]
@@ -508,15 +673,18 @@ async def get_subgraph(
         }
         SmartLogger.log(
             "INFO",
-            "Subgraph returned",
-            category="api.graph.subgraph",
-            params={"nodes": len(nodes), "relationships": len(relationships)},
+            "Subgraph returned.",
+            category="api.graph.subgraph.done",
+            params={
+                **http_context(request),
+                "summary": {"nodes": len(nodes), "relationships": len(relationships)},
+            },
         )
         return payload
 
 
 @app.get("/api/graph/expand/{node_id}")
-async def expand_node(node_id: str) -> dict[str, Any]:
+async def expand_node(node_id: str, request: Request) -> dict[str, Any]:
     """
     Expand a node to get its connected nodes based on type.
     - BoundedContext → All Aggregates + Policies
@@ -533,18 +701,33 @@ async def expand_node(node_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Expand requested", category="api.graph.expand", params={"node_id": node_id})
+        SmartLogger.log(
+            "INFO",
+            "Expand requested: expanding connected nodes by node type.",
+            category="api.graph.expand.request",
+            params={**http_context(request), "inputs": {"node_id": node_id}},
+        )
         type_result = session.run(type_query, node_id=node_id)
         type_record = type_result.single()
         
         if not type_record:
-            SmartLogger.log("WARNING", "Expand node not found", category="api.graph.expand", params={"node_id": node_id})
+            SmartLogger.log(
+                "WARNING",
+                "Expand aborted: node_id not found.",
+                category="api.graph.expand.not_found",
+                params={**http_context(request), "inputs": {"node_id": node_id}},
+            )
             raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
         
         node_type = type_record["nodeType"]
         main_node = dict(type_record["node"])
         main_node["type"] = node_type
-        SmartLogger.log("INFO", "Expand node type resolved", category="api.graph.expand", params={"node_id": node_id, "node_type": node_type})
+        SmartLogger.log(
+            "INFO",
+            "Expand node type resolved: determining expansion strategy.",
+            category="api.graph.expand.node_type",
+            params={**http_context(request), "inputs": {"node_id": node_id}, "nodeType": node_type},
+        )
         
         nodes = [main_node]
         relationships = []
@@ -738,6 +921,7 @@ async def expand_node(node_id: str) -> dict[str, Any]:
 
 @app.get("/api/graph/find-relations")
 async def find_relations(
+    request: Request,
     node_ids: list[str] = Query(..., description="List of node IDs on canvas"),
 ) -> list[dict[str, Any]]:
     """
@@ -787,7 +971,12 @@ async def find_relations(
     seen = set()
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Find relations requested", category="api.graph.find_relations", params={"node_ids_count": len(node_ids)})
+        SmartLogger.log(
+            "INFO",
+            "Find relations requested: discovering relationships among canvas nodes.",
+            category="api.graph.find_relations.request",
+            params={**http_context(request), "inputs": {"node_ids": summarize_for_log(node_ids)}},
+        )
         # Get direct relationships
         result = session.run(direct_query, node_ids=node_ids)
         for record in result:
@@ -806,12 +995,18 @@ async def find_relations(
                 seen.add(key)
                 relationships.append(rel)
     
-    SmartLogger.log("INFO", "Find relations returned", category="api.graph.find_relations", params={"relationships": len(relationships)})
+    SmartLogger.log(
+        "INFO",
+        "Find relations returned.",
+        category="api.graph.find_relations.done",
+        params={**http_context(request), "summary": {"relationships": len(relationships)}},
+    )
     return relationships
 
 
 @app.get("/api/graph/find-cross-bc-relations")
 async def find_cross_bc_relations(
+    request: Request,
     new_node_ids: list[str] = Query(..., description="Newly added node IDs"),
     existing_node_ids: list[str] = Query(..., description="Existing node IDs on canvas"),
 ) -> list[dict[str, Any]]:
@@ -856,15 +1051,26 @@ async def find_cross_bc_relations(
     with get_session() as session:
         SmartLogger.log(
             "INFO",
-            "Find cross-BC relations requested",
-            category="api.graph.find_cross_bc",
-            params={"new_ids": len(new_node_ids), "existing_ids": len(existing_node_ids)},
+            "Find cross-BC relations requested: checking TRIGGERS/INVOKES across new vs existing sets.",
+            category="api.graph.find_cross_bc.request",
+            params={
+                **http_context(request),
+                "inputs": {
+                    "new_node_ids": summarize_for_log(new_node_ids),
+                    "existing_node_ids": summarize_for_log(existing_node_ids),
+                },
+            },
         )
         result = session.run(query, new_ids=new_node_ids, existing_ids=existing_node_ids)
         record = result.single()
         
         if not record:
-            SmartLogger.log("INFO", "Find cross-BC relations empty", category="api.graph.find_cross_bc")
+            SmartLogger.log(
+                "INFO",
+                "Find cross-BC relations empty: no matching cross-BC edges found.",
+                category="api.graph.find_cross_bc.empty",
+                params={**http_context(request)},
+            )
             return []
         
         # Filter out null relationships and deduplicate
@@ -878,12 +1084,17 @@ async def find_cross_bc_relations(
                     seen.add(key)
                     relationships.append(rel)
         
-        SmartLogger.log("INFO", "Find cross-BC relations returned", category="api.graph.find_cross_bc", params={"relationships": len(relationships)})
+        SmartLogger.log(
+            "INFO",
+            "Find cross-BC relations returned.",
+            category="api.graph.find_cross_bc.done",
+            params={**http_context(request), "summary": {"relationships": len(relationships)}},
+        )
         return relationships
 
 
 @app.get("/api/graph/node-context/{node_id}")
-async def get_node_context(node_id: str) -> dict[str, Any]:
+async def get_node_context(node_id: str, request: Request) -> dict[str, Any]:
     """
     Get the BoundedContext that contains a given node.
     Returns BC info so nodes can be properly grouped.
@@ -904,21 +1115,36 @@ async def get_node_context(node_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Node context requested", category="api.graph.node_context", params={"node_id": node_id})
+        SmartLogger.log(
+            "INFO",
+            "Node context requested: resolving parent BC for node.",
+            category="api.graph.node_context.request",
+            params={**http_context(request), "inputs": {"node_id": node_id}},
+        )
         result = session.run(query, node_id=node_id)
         record = result.single()
         
         if not record:
-            SmartLogger.log("WARNING", "Node context not found", category="api.graph.node_context", params={"node_id": node_id})
+            SmartLogger.log(
+                "WARNING",
+                "Node context not found: node_id missing or BC could not be resolved.",
+                category="api.graph.node_context.not_found",
+                params={**http_context(request), "inputs": {"node_id": node_id}},
+            )
             return {"nodeId": node_id, "bcId": None}
         
         payload = dict(record["result"])
-        SmartLogger.log("INFO", "Node context returned", category="api.graph.node_context", params={"node_id": node_id, "bcId": payload.get("bcId")})
+        SmartLogger.log(
+            "INFO",
+            "Node context returned.",
+            category="api.graph.node_context.done",
+            params={**http_context(request), "result": payload},
+        )
         return payload
 
 
 @app.get("/api/graph/expand-with-bc/{node_id}")
-async def expand_node_with_bc(node_id: str) -> dict[str, Any]:
+async def expand_node_with_bc(node_id: str, request: Request) -> dict[str, Any]:
     """
     Expand a node and include its parent BoundedContext.
     This ensures nodes are always displayed within their BC container.
@@ -940,12 +1166,22 @@ async def expand_node_with_bc(node_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Expand-with-BC requested", category="api.graph.expand_with_bc", params={"node_id": node_id})
+        SmartLogger.log(
+            "INFO",
+            "Expand-with-BC requested: expanding node and including its parent BC for grouping.",
+            category="api.graph.expand_with_bc.request",
+            params={**http_context(request), "inputs": {"node_id": node_id}},
+        )
         ctx_result = session.run(context_query, node_id=node_id)
         ctx_record = ctx_result.single()
         
         if not ctx_record:
-            SmartLogger.log("WARNING", "Expand-with-BC node not found", category="api.graph.expand_with_bc", params={"node_id": node_id})
+            SmartLogger.log(
+                "WARNING",
+                "Expand-with-BC aborted: node_id not found.",
+                category="api.graph.expand_with_bc.not_found",
+                params={**http_context(request), "inputs": {"node_id": node_id}},
+            )
             raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
         
         node_type = ctx_record["nodeType"]
@@ -1226,7 +1462,7 @@ async def expand_node_with_bc(node_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/graph/event-triggers/{event_id}")
-async def get_event_triggers(event_id: str) -> dict[str, Any]:
+async def get_event_triggers(event_id: str, request: Request) -> dict[str, Any]:
     """
     Get all Policies triggered by an Event, along with their parent BCs and related nodes.
     Used when double-clicking an Event on canvas to expand triggered policies.
@@ -1239,7 +1475,12 @@ async def get_event_triggers(event_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Event triggers requested", category="api.graph.event_triggers", params={"event_id": event_id})
+        SmartLogger.log(
+            "INFO",
+            "Event triggers requested: expanding policies triggered by this event (incl. BC context).",
+            category="api.graph.event_triggers.request",
+            params={**http_context(request), "inputs": {"event_id": event_id}},
+        )
         result = session.run(query, event_id=event_id)
         
         nodes = []

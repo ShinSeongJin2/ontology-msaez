@@ -21,10 +21,12 @@ from typing import Any, Optional, List
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
+from starlette.requests import Request
 from neo4j import GraphDatabase
 from pydantic import BaseModel, Field
 
 from api.smart_logger import SmartLogger
+from api.request_logging import http_context, summarize_for_log
 
 load_dotenv()
 
@@ -132,7 +134,7 @@ class ApplyChangesResponse(BaseModel):
 
 
 @router.get("/impact/{user_story_id}")
-async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
+async def get_impact_analysis(user_story_id: str, request: Request) -> dict[str, Any]:
     """
     Analyze the impact of changing a User Story.
     
@@ -145,6 +147,12 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
     2. Through BoundedContext hierarchy
     3. All related Commands and Events in the same aggregate
     """
+    SmartLogger.log(
+        "INFO",
+        "Impact analysis requested: resolving connected nodes for the given user story.",
+        category="change.impact.inputs",
+        params={**http_context(request), "inputs": {"user_story_id": user_story_id}},
+    )
     # Query to get the user story and all connected objects
     query = """
     MATCH (us:UserStory {id: $user_story_id})
@@ -195,12 +203,22 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Impact analysis requested", category="change.impact", params={"user_story_id": user_story_id})
+        SmartLogger.log(
+            "INFO",
+            "Impact analysis executing Neo4j query: collecting aggregates/commands/events reachable from user story.",
+            category="change.impact.query",
+            params={**http_context(request), "user_story_id": user_story_id},
+        )
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
         
         if not record:
-            SmartLogger.log("WARNING", "User story not found for impact analysis", category="change.impact", params={"user_story_id": user_story_id})
+            SmartLogger.log(
+                "WARNING",
+                "Impact analysis failed: user story not found in Neo4j.",
+                category="change.impact.not_found",
+                params={**http_context(request), "user_story_id": user_story_id},
+            )
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
         
         user_story = dict(record["userStory"])
@@ -230,9 +248,10 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
         
         SmartLogger.log(
             "INFO",
-            "Impact analysis computed",
-            category="change.impact",
+            "Impact analysis computed: impacted nodes deduplicated and returned.",
+            category="change.impact.done",
             params={
+                **http_context(request),
                 "user_story_id": user_story_id,
                 "boundedContext": bounded_context.get("id") if bounded_context else None,
                 "impactedNodes": len(impacted_nodes),
@@ -246,7 +265,7 @@ async def get_impact_analysis(user_story_id: str) -> dict[str, Any]:
 
 
 @router.post("/plan")
-async def generate_change_plan(request: ChangePlanRequest) -> dict[str, Any]:
+async def generate_change_plan(payload: ChangePlanRequest, request: Request) -> dict[str, Any]:
     """
     Generate a change plan using LangGraph-based workflow.
     
@@ -270,29 +289,38 @@ async def generate_change_plan(request: ChangePlanRequest) -> dict[str, Any]:
     try:
         SmartLogger.log(
             "INFO",
+            "Generate change plan called: capturing full router inputs for reproducibility.",
+            category="change.plan.inputs",
+            params={
+                **http_context(request),
+                "inputs": summarize_for_log(payload.model_dump(by_alias=True)),
+            },
+        )
+        SmartLogger.log(
+            "INFO",
             "Generate change plan requested",
             category="change.plan",
             params={
-                "userStoryId": request.userStoryId,
-                "impactedNodes": len(request.impactedNodes),
-                "hasFeedback": bool(request.feedback),
-                "hasPreviousPlan": bool(request.previousPlan),
+                "userStoryId": payload.userStoryId,
+                "impactedNodes": len(payload.impactedNodes),
+                "hasFeedback": bool(payload.feedback),
+                "hasPreviousPlan": bool(payload.previousPlan),
             },
         )
         result = run_change_planning(
-            user_story_id=request.userStoryId,
-            original_user_story=request.originalUserStory or {},
-            edited_user_story=request.editedUserStory,
-            connected_objects=request.impactedNodes,
-            feedback=request.feedback,
-            previous_plan=request.previousPlan
+            user_story_id=payload.userStoryId,
+            original_user_story=payload.originalUserStory or {},
+            edited_user_story=payload.editedUserStory,
+            connected_objects=payload.impactedNodes,
+            feedback=payload.feedback,
+            previous_plan=payload.previousPlan
         )
         SmartLogger.log(
             "INFO",
             "Generate change plan completed",
             category="change.plan",
             params={
-                "userStoryId": request.userStoryId,
+                "userStoryId": payload.userStoryId,
                 "scope": result.get("scope"),
                 "changes": len(result.get("changes") or []),
                 "relatedObjects": len(result.get("relatedObjects") or []),
@@ -307,13 +335,18 @@ async def generate_change_plan(request: ChangePlanRequest) -> dict[str, Any]:
             "ERROR",
             "Failed to generate change plan",
             category="change.plan",
-            params={"userStoryId": request.userStoryId, "error": str(e), "traceback": traceback.format_exc()},
+            params={
+                **http_context(request),
+                "userStoryId": getattr(payload, "userStoryId", None),
+                "error": str(e),
+                "traceback": traceback.format_exc(),
+            },
         )
         raise HTTPException(status_code=500, detail=f"Failed to generate change plan: {str(e)}")
 
 
 @router.post("/apply")
-async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
+async def apply_changes(payload: ApplyChangesRequest, request: Request) -> ApplyChangesResponse:
     """
     Apply the approved change plan to Neo4j.
     
@@ -326,9 +359,12 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
     errors = []
     SmartLogger.log(
         "INFO",
-        "Apply changes requested",
-        category="change.apply",
-        params={"userStoryId": request.userStoryId, "changePlan": len(request.changePlan)},
+        "Apply changes requested: capturing full router inputs for reproducibility.",
+        category="change.apply.inputs",
+        params={
+            **http_context(request),
+            "inputs": summarize_for_log(payload.model_dump(by_alias=True)),
+        },
     )
     
     with get_session() as session:
@@ -344,24 +380,51 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
             """
             session.run(
                 us_query,
-                user_story_id=request.userStoryId,
-                role=request.editedUserStory.get("role"),
-                action=request.editedUserStory.get("action"),
-                benefit=request.editedUserStory.get("benefit")
+                user_story_id=payload.userStoryId,
+                role=payload.editedUserStory.get("role"),
+                action=payload.editedUserStory.get("action"),
+                benefit=payload.editedUserStory.get("benefit"),
             )
             applied_changes.append({
                 "action": "update",
                 "targetType": "UserStory",
-                "targetId": request.userStoryId,
+                "targetId": payload.userStoryId,
                 "success": True
             })
+            SmartLogger.log(
+                "INFO",
+                "User story updated: new role/action/benefit written to Neo4j.",
+                category="change.apply.user_story.updated",
+                params={
+                    **http_context(request),
+                    "userStoryId": payload.userStoryId,
+                    "editedUserStory": summarize_for_log(payload.editedUserStory),
+                },
+            )
         except Exception as e:
             errors.append(f"Failed to update user story: {str(e)}")
-            SmartLogger.log("ERROR", "Failed to update user story", category="change.apply", params={"userStoryId": request.userStoryId, "error": str(e)})
+            SmartLogger.log(
+                "ERROR",
+                "Failed to update user story: Neo4j update raised an exception.",
+                category="change.apply.user_story.error",
+                params={**http_context(request), "userStoryId": payload.userStoryId, "error": str(e)},
+            )
         
         # Step 2: Apply each change in the plan
-        for change in request.changePlan:
+        for idx, change in enumerate(payload.changePlan):
             try:
+                SmartLogger.log(
+                    "INFO",
+                    "Applying change item from approved plan.",
+                    category="change.apply.item.start",
+                    params={
+                        **http_context(request),
+                        "userStoryId": payload.userStoryId,
+                        "index": idx + 1,
+                        "total": len(payload.changePlan),
+                        "change": summarize_for_log(change),
+                    },
+                )
                 if change.get("action") == "rename":
                     # Rename a node
                     rename_query = """
@@ -378,6 +441,12 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                         **change,
                         "success": True
                     })
+                    SmartLogger.log(
+                        "INFO",
+                        "Applied change item: node renamed successfully.",
+                        category="change.apply.item.renamed",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
                     
                 elif change.get("action") == "update":
                     # Update node properties
@@ -396,6 +465,12 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                         **change,
                         "success": True
                     })
+                    SmartLogger.log(
+                        "INFO",
+                        "Applied change item: node updated successfully.",
+                        category="change.apply.item.updated",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
                     
                 elif change.get("action") == "create":
                     # Create a new node based on type
@@ -452,11 +527,24 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                             name=target_name,
                             description=change.get("description", "")
                         )
+                    else:
+                        SmartLogger.log(
+                            "WARNING",
+                            "Create change item used an unsupported targetType: no node was created.",
+                            category="change.apply.item.create.unsupported",
+                            params={**http_context(request), "targetType": target_type, "change": summarize_for_log(change)},
+                        )
                     
                     applied_changes.append({
                         **change,
                         "success": True
                     })
+                    SmartLogger.log(
+                        "INFO",
+                        "Applied change item: node create attempted.",
+                        category="change.apply.item.created",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
                     
                 elif change.get("action") == "connect":
                     # Create a connection between nodes
@@ -491,11 +579,24 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                         RETURN us.id as id
                         """
                         session.run(connect_query, source_id=source_id, target_id=target_id)
+                    else:
+                        SmartLogger.log(
+                            "WARNING",
+                            "Connect change item used an unsupported connectionType: no relationship was created.",
+                            category="change.apply.item.connect.unsupported",
+                            params={**http_context(request), "connectionType": connection_type, "change": summarize_for_log(change)},
+                        )
                     
                     applied_changes.append({
                         **change,
                         "success": True
                     })
+                    SmartLogger.log(
+                        "INFO",
+                        "Applied change item: relationship connect attempted.",
+                        category="change.apply.item.connected",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
                     
                 elif change.get("action") == "delete":
                     # Delete a node (soft delete or actual delete)
@@ -512,6 +613,19 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                         **change,
                         "success": True
                     })
+                    SmartLogger.log(
+                        "INFO",
+                        "Applied change item: node soft-deleted successfully.",
+                        category="change.apply.item.deleted",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
+                else:
+                    SmartLogger.log(
+                        "WARNING",
+                        "Apply skipped: change item has unsupported 'action'.",
+                        category="change.apply.item.unsupported",
+                        params={**http_context(request), "change": summarize_for_log(change)},
+                    )
                     
             except Exception as e:
                 errors.append(f"Failed to apply {change.get('action')} on {change.get('targetId')}: {str(e)}")
@@ -525,7 +639,8 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
                     "Failed to apply change item",
                     category="change.apply",
                     params={
-                        "userStoryId": request.userStoryId,
+                        **http_context(request),
+                        "userStoryId": payload.userStoryId,
                         "action": change.get("action"),
                         "targetId": change.get("targetId"),
                         "error": str(e),
@@ -537,7 +652,8 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
         "Apply changes completed",
         category="change.apply",
         params={
-            "userStoryId": request.userStoryId,
+            **http_context(request),
+            "userStoryId": payload.userStoryId,
             "appliedChanges": len(applied_changes),
             "errors": len(errors),
         },
@@ -550,7 +666,7 @@ async def apply_changes(request: ApplyChangesRequest) -> ApplyChangesResponse:
 
 
 @router.get("/history/{user_story_id}")
-async def get_change_history(user_story_id: str) -> list[dict[str, Any]]:
+async def get_change_history(user_story_id: str, request: Request) -> list[dict[str, Any]]:
     """
     Get the change history for a user story.
     """
@@ -563,24 +679,43 @@ async def get_change_history(user_story_id: str) -> list[dict[str, Any]]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "Change history requested", category="change.history", params={"user_story_id": user_story_id})
+        SmartLogger.log(
+            "INFO",
+            "Change history requested: returning current user story and version history.",
+            category="change.history.request",
+            params={**http_context(request), "inputs": {"user_story_id": user_story_id}},
+        )
         result = session.run(query, user_story_id=user_story_id)
         record = result.single()
         
         if not record:
-            SmartLogger.log("WARNING", "Change history user story not found", category="change.history", params={"user_story_id": user_story_id})
+            SmartLogger.log(
+                "WARNING",
+                "Change history not found: user story id did not match any node.",
+                category="change.history.not_found",
+                params={**http_context(request), "inputs": {"user_story_id": user_story_id}},
+            )
             raise HTTPException(status_code=404, detail=f"User story {user_story_id} not found")
         
         payload = {
             "current": dict(record["current"]) if record["current"] else None,
             "history": [dict(h) for h in record["history"]]
         }
-        SmartLogger.log("INFO", "Change history returned", category="change.history", params={"user_story_id": user_story_id, "versions": len(payload.get("history") or [])})
+        SmartLogger.log(
+            "INFO",
+            "Change history returned.",
+            category="change.history.done",
+            params={
+                **http_context(request),
+                "user_story_id": user_story_id,
+                "versions": len(payload.get("history") or []),
+            },
+        )
         return payload
 
 
 @router.post("/search")
-async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult]:
+async def vector_search(payload: VectorSearchRequest, request: Request) -> List[VectorSearchResult]:
     """
     Search for related objects using semantic/keyword matching.
     
@@ -627,14 +762,34 @@ async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult
     """
     
     # Extract keywords from query
-    keywords = [w.strip() for w in request.query.split() if len(w.strip()) > 2]
-    if not keywords:
-        keywords = [request.query]
     SmartLogger.log(
         "INFO",
-        "Vector search requested",
-        category="change.search",
-        params={"query": request.query, "keywords": keywords[:10], "limit": request.limit, "nodeTypes": request.nodeTypes},
+        "Vector search requested: capturing router inputs for reproducibility.",
+        category="change.search.inputs",
+        params={**http_context(request), "inputs": summarize_for_log(payload.model_dump())},
+    )
+
+    keywords = [w.strip() for w in payload.query.split() if len(w.strip()) > 2]
+    if not keywords:
+        keywords = [payload.query]
+        SmartLogger.log(
+            "INFO",
+            "Vector search keyword fallback: query had no tokens > 2 chars, using full query as keyword.",
+            category="change.search.keyword_fallback",
+            params={**http_context(request), "query": payload.query},
+        )
+    SmartLogger.log(
+        "INFO",
+        "Vector search executing Neo4j query.",
+        category="change.search.query",
+        params={
+            **http_context(request),
+            "query": payload.query,
+            "keywords": keywords[:10],
+            "limit": payload.limit,
+            "nodeTypes": payload.nodeTypes,
+            "excludeIds_count": len(payload.excludeIds or []),
+        },
     )
     
     with get_session() as session:
@@ -642,10 +797,10 @@ async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult
             query,
             keywords=keywords,
             primary_keyword=keywords[0] if keywords else "",
-            query=request.query,
-            nodeTypes=request.nodeTypes if request.nodeTypes else None,
-            excludeIds=request.excludeIds,
-            limit=request.limit
+            query=payload.query,
+            nodeTypes=payload.nodeTypes if payload.nodeTypes else None,
+            excludeIds=payload.excludeIds,
+            limit=payload.limit
         )
         
         results = []
@@ -664,12 +819,17 @@ async def vector_search(request: VectorSearchRequest) -> List[VectorSearchResult
                     description=obj.get("description")
                 ))
         
-        SmartLogger.log("INFO", "Vector search returned", category="change.search", params={"query": request.query, "results": len(results)})
+        SmartLogger.log(
+            "INFO",
+            "Vector search returned.",
+            category="change.search.done",
+            params={**http_context(request), "query": payload.query, "results": len(results)},
+        )
         return results
 
 
 @router.get("/all-nodes")
-async def get_all_nodes() -> dict[str, List[dict[str, Any]]]:
+async def get_all_nodes(request: Request) -> dict[str, List[dict[str, Any]]]:
     """
     Get all nodes grouped by type for frontend reference.
     Useful for showing available connection targets.
@@ -696,13 +856,23 @@ async def get_all_nodes() -> dict[str, List[dict[str, Any]]]:
     """
     
     with get_session() as session:
-        SmartLogger.log("INFO", "All-nodes requested", category="change.all_nodes")
+        SmartLogger.log(
+            "INFO",
+            "All-nodes requested: returning nodes grouped by BC for frontend reference.",
+            category="change.all_nodes.request",
+            params=http_context(request),
+        )
         result = session.run(query)
         bounded_contexts = []
         for record in result:
             bc = dict(record["boundedContext"])
             bounded_contexts.append(bc)
 
-        SmartLogger.log("INFO", "All-nodes returned", category="change.all_nodes", params={"boundedContexts": len(bounded_contexts)})
+        SmartLogger.log(
+            "INFO",
+            "All-nodes returned.",
+            category="change.all_nodes.done",
+            params={**http_context(request), "boundedContexts": len(bounded_contexts)},
+        )
         return {"boundedContexts": bounded_contexts}
 
